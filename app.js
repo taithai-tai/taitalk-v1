@@ -5,14 +5,15 @@ const DEFAULT_FOLDERS = ["Main","Important","Advertising","Request","Group","Wor
 const STORAGE_KEY = "taitalk:v2";
 const SESSION_KEY = "taitalk:v2:session";
 const app = document.querySelector("#app");
+let didMigrateState = false;
 
 // ─── State ───────────────────────────────────────────────────
 function defaultState() {
   return {
     users: [
-      { id: "@mali",      username: "mali",      displayName: "Mali",      password: "1234", avatar: "", blocked: [] },
-      { id: "@narin",     username: "narin",     displayName: "Narin",     password: "1234", avatar: "", blocked: [] },
-      { id: "@studyteam", username: "studyteam", displayName: "Study Team",password: "1234", avatar: "", blocked: [] },
+      { id: "ADD-1002", username: "mali",      displayName: "Mali",       password: "1234", avatar: "", blocked: [] },
+      { id: "ADD-1003", username: "narin",     displayName: "Narin",      password: "1234", avatar: "", blocked: [] },
+      { id: "ADD-1004", username: "studyteam", displayName: "Study Team", password: "1234", avatar: "", blocked: [] },
     ],
     friendships: [],
     customFolders: [],
@@ -30,12 +31,12 @@ function loadState() {
     if (!saved) return defaultState();
     const parsed = JSON.parse(saved);
     const base = defaultState();
-    return {
+    return migrateStateIds({
       ...base, ...parsed,
       folderSettings: { ...base.folderSettings, ...(parsed.folderSettings || {}) },
       appSettings:    { ...base.appSettings,    ...(parsed.appSettings    || {}) },
       customFolders:  parsed.customFolders || [],
-    };
+    });
   } catch { return defaultState(); }
 }
 
@@ -43,6 +44,7 @@ function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 
 let state = loadState();
 let sessionId = localStorage.getItem(SESSION_KEY) || null;
+if (didMigrateState) saveState();
 
 let view = {
   authMode: "register",
@@ -73,6 +75,75 @@ function esc(v) {
 }
 function unique(arr) { return [...new Set(arr)]; }
 function makeId(p) { return `${p}-${Math.random().toString(36).slice(2,8)}-${Date.now().toString(36)}`; }
+function stableAddId(seed) {
+  let hash = 0;
+  for (const char of String(seed || "user").toLowerCase()) hash = ((hash * 31) + char.charCodeAt(0)) % 9000;
+  return `ADD-${1000 + hash}`;
+}
+function legacyIdToAdd(id, username = "") {
+  const raw = String(id || "").trim();
+  if (/^ADD-\d+/i.test(raw)) return raw.toUpperCase();
+  if (/^TT-\d+/i.test(raw)) return raw.replace(/^TT-/i, "ADD-").toUpperCase();
+  const handle = raw.startsWith("@") ? raw.slice(1).toLowerCase() : String(username || raw).toLowerCase();
+  if (handle === "mali") return "ADD-1002";
+  if (handle === "narin") return "ADD-1003";
+  if (handle === "studyteam") return "ADD-1004";
+  return stableAddId(handle);
+}
+function parseFriendQuery(raw) {
+  const cleaned = String(raw || "").trim();
+  const parts = cleaned.split(":");
+  const value = parts.length >= 2 && parts[0].toUpperCase() === "TAITALK" ? parts[1] : cleaned;
+  return value.trim().toLowerCase().replace(/^@+/, "");
+}
+function findUserByFriendQuery(raw) {
+  const q = parseFriendQuery(raw);
+  if (!q) return null;
+  const addId = /^tt-\d+/i.test(q) ? q.replace(/^tt-/i, "add-") : q;
+  return state.users.find((user) => {
+    const id = String(user.id || "").toLowerCase();
+    const legacy = legacyIdToAdd(user.id, user.username).toLowerCase();
+    return id === addId || legacy === addId || String(user.username || "").toLowerCase() === q || String(user.displayName || "").toLowerCase() === q;
+  }) || null;
+}
+function migrateStateIds(data) {
+  const idMap = new Map();
+  data.users = (data.users || []).map((user) => {
+    const nextId = legacyIdToAdd(user.id, user.username);
+    if (nextId !== user.id) didMigrateState = true;
+    idMap.set(user.id, nextId);
+    return { ...user, id: nextId, blocked: (user.blocked || []).map((id) => idMap.get(id) || legacyIdToAdd(id)) };
+  });
+  const convert = (id) => idMap.get(id) || legacyIdToAdd(id);
+  data.friendships = (data.friendships || []).map((pair) => pair.map(convert));
+  data.chats = (data.chats || []).map((chat) => ({
+    ...chat,
+    members: (chat.members || []).map(convert),
+    unread: Object.fromEntries(Object.entries(chat.unread || {}).map(([key, value]) => [convert(key), value])),
+    importantUnread: Object.fromEntries(Object.entries(chat.importantUnread || {}).map(([key, value]) => [convert(key), value])),
+    hiddenFor: (chat.hiddenFor || []).map(convert),
+    pinnedFor: (chat.pinnedFor || []).map(convert),
+    mutedFor: (chat.mutedFor || []).map(convert),
+    messages: (chat.messages || []).map((message) => ({
+      ...message,
+      senderId: convert(message.senderId),
+      hiddenFor: (message.hiddenFor || []).map(convert),
+    })),
+  }));
+  for (const seed of defaultState().users) {
+    const exists = data.users.some((user) => user.id === seed.id || user.username === seed.username);
+    if (!exists) {
+      data.users.push(seed);
+      didMigrateState = true;
+    }
+  }
+  const savedSession = localStorage.getItem(SESSION_KEY);
+  if (savedSession && convert(savedSession) !== savedSession) {
+    localStorage.setItem(SESSION_KEY, convert(savedSession));
+    didMigrateState = true;
+  }
+  return data;
+}
 function formatTime(v) {
   return new Intl.DateTimeFormat("th-TH",{hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date(v));
 }
@@ -195,7 +266,8 @@ function handleAuth(form, mode) {
   const confirm = String(data.get("confirm")||"");
   if (password!==confirm) { showAuthError("Password ไม่ตรงกัน"); return; }
   if (state.users.some(u => u.username.toLowerCase()===username.toLowerCase())) { showAuthError("Username นี้ถูกใช้แล้ว"); return; }
-  const newId = "@" + username.toLowerCase();
+  let newId = `ADD-${Math.floor(1000 + Math.random() * 9000)}`;
+  while (state.users.some((user) => user.id === newId)) newId = `ADD-${Math.floor(1000 + Math.random() * 9000)}`;
   const user = { id:newId, username:username.toLowerCase(), displayName:username, password, avatar:"", blocked:[] };
   state.users.push(user);
   saveState();
@@ -212,10 +284,9 @@ function showAuthError(msg) {
 
 // ─── Friend search ────────────────────────────────────────────
 function doFriendSearch(raw) {
-  const q = raw.trim().toLowerCase().replace(/^@+/,"");
+  const q = parseFriendQuery(raw);
   if (!q) return;
-  // ค้นหาจาก username ตรงๆ
-  const found = state.users.find(u => u.username.toLowerCase() === q);
+  const found = findUserByFriendQuery(raw);
   if (!found) { view.addFriendResult="notfound"; return; }
   if (isBlocked(sessionId, found.id)) { view.addFriendResult="notfound"; return; }
   view.addFriendResult = found;
@@ -274,8 +345,7 @@ function stopQrScanner() {
   if (qrStream) { qrStream.getTracks().forEach(t=>t.stop()); qrStream=null; }
 }
 function addFriendFromQr(code) {
-  const cleaned = String(code||"").trim().toLowerCase().replace(/^@+/,"");
-  const other = state.users.find(u=>u.username.toLowerCase()===cleaned||u.id.toLowerCase()==="@"+cleaned);
+  const other = findUserByFriendQuery(code);
   if (!other||other.id===sessionId||isBlocked(sessionId,other.id)) { alert("ไม่พบผู้ใช้จาก QR นี้"); return; }
   addFriendPair(sessionId,other.id);
   const chat = ensureChatForUser(other.id);
@@ -554,12 +624,12 @@ function peoplePanel(selected) {
 
   return `<div class="stack">
   <div class="block">
-    <h3>เพิ่มเพื่อนด้วย @username</h3>
-    <p class="hint">พิมพ์ username แล้วกด Enter หรือกดปุ่มค้นหา</p>
+    <h3>เพิ่มเพื่อนด้วย ID หรือ Username</h3>
+    <p class="hint">พิมพ์ TaiTalk ID เช่น ADD-1002 หรือ username แล้วกดค้นหา</p>
     <form class="add-friend-search" data-action="do-search-friend">
       <div class="add-friend-input-row">
-        <span class="at-prefix">@</span>
-        <input class="add-friend-input" name="q" placeholder="username" autocomplete="off" spellcheck="false" />
+        <span class="at-prefix">ID</span>
+        <input class="add-friend-input" name="q" placeholder="ADD-1002 หรือ username" autocomplete="off" spellcheck="false" />
       </div>
       <button class="primary" type="submit"><i data-lucide="search"></i>ค้นหา</button>
     </form>
@@ -591,7 +661,7 @@ function peoplePanel(selected) {
 }
 
 function renderQr(user) {
-  const code = user.id;
+  const code = `TAITALK:${user.id}:${user.username}`;
   return `<div class="qr-card"><img class="qr-image" src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=10&data=${encodeURIComponent(code)}" alt="${esc(code)}" /><code>${esc(code)}</code></div>`;
 }
 
@@ -693,7 +763,7 @@ function renderModal() {
   return `<div class="modal-backdrop" id="modal"><div class="modal"><h2>ฟีเจอร์นี้ยังไม่พร้อม</h2><p class="hint">จะเปิดใช้งานในเวอร์ชันถัดไป</p><div class="modal-actions"><button class="primary" data-action="close-modal">ตกลง</button></div></div></div>`;
 }
 function renderScanner() {
-  return `<div class="modal-backdrop${view.scannerOpen?" show":""}" id="qr-scanner"><div class="modal scanner-modal"><h2>สแกน QR Code</h2><div class="scanner-frame"><video id="qr-video" playsinline muted></video><div class="scan-corners"></div></div><p class="hint">${esc(view.scannerStatus)}</p><label class="field">หรือพิมพ์ @username<input value="${esc(view.qrInput)}" data-action="qr-input" placeholder="@username" /></label><div class="modal-actions"><button class="ghost" data-action="close-scanner">ปิด</button><button class="primary" data-action="add-by-qr">เพิ่มเพื่อน</button></div></div></div>`;
+  return `<div class="modal-backdrop${view.scannerOpen?" show":""}" id="qr-scanner"><div class="modal scanner-modal"><h2>สแกน QR Code</h2><div class="scanner-frame"><video id="qr-video" playsinline muted></video><div class="scan-corners"></div></div><p class="hint">${esc(view.scannerStatus)}</p><label class="field">หรือพิมพ์ TaiTalk ID<input value="${esc(view.qrInput)}" data-action="qr-input" placeholder="ADD-1002" /></label><div class="modal-actions"><button class="ghost" data-action="close-scanner">ปิด</button><button class="primary" data-action="add-by-qr">เพิ่มเพื่อน</button></div></div></div>`;
 }
 
 // ─── Collapsing header ────────────────────────────────────────

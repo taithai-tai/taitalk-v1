@@ -1319,7 +1319,7 @@ select:focus {
   }
 }
 
-/* ── Add Friend Search (v2 @username system) ── */
+/* ── Add Friend Search (v2 ID/username system) ── */
 .add-friend-search {
   display: flex;
   gap: 8px;
