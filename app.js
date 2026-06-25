@@ -123,12 +123,22 @@ function afterRender() {
 function setupCollapsingHeader() {
   const shell = document.querySelector(".app-shell");
   if (!shell) return;
+  const topbar = document.querySelector(".topbar");
+  if (topbar && !topbar.dataset.peekBound) {
+    topbar.dataset.peekBound = "true";
+    topbar.addEventListener("click", (event) => {
+      if (event.target.closest("[data-action]")) return;
+      if (shell.classList.contains("header-compact")) shell.classList.toggle("folder-peek");
+    });
+  }
   const scrollers = document.querySelectorAll(".home-page, .content-page, .list-body, .panel, .messages");
   scrollers.forEach((scroller) => {
     scroller.addEventListener(
       "scroll",
       () => {
-        shell.classList.toggle("header-compact", scroller.scrollTop > 24);
+        const compact = scroller.scrollTop > 24;
+        shell.classList.toggle("header-compact", compact);
+        if (!compact) shell.classList.remove("folder-peek");
       },
       { passive: true },
     );
@@ -1432,6 +1442,10 @@ app.addEventListener("click", (event) => {
     render();
   }
   if (action === "detail-tab") {
+    if (target.classList.contains("profile-button") && document.querySelector(".app-shell")?.classList.contains("header-compact")) {
+      document.querySelector(".app-shell")?.classList.toggle("folder-peek");
+      return;
+    }
     view.detailTab = target.dataset.tab;
     view.screen = "tools";
     view.manageMode = false;

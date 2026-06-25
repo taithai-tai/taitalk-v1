@@ -367,6 +367,14 @@ select:focus {
   pointer-events: none;
 }
 
+.header-compact.folder-peek .folder-list {
+  max-height: 64px;
+  padding-top: 8px;
+  padding-bottom: 10px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .header-compact .avatar {
   width: 32px;
   height: 32px;
