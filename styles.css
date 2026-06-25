@@ -349,13 +349,22 @@ select:focus {
 }
 
 .header-compact .search-wrap {
-  padding-top: 6px;
-  padding-bottom: 6px;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .header-compact .folder-list {
-  padding-top: 5px;
-  padding-bottom: 7px;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .header-compact .avatar {
@@ -425,6 +434,9 @@ select:focus {
 .search-wrap {
   padding: 12px;
   border-bottom: 1px solid var(--line);
+  max-height: 76px;
+  opacity: 1;
+  transition: max-height 180ms ease, padding 180ms ease, opacity 140ms ease, border 180ms ease;
 }
 
 .folder-list,
@@ -439,6 +451,9 @@ select:focus {
   gap: 8px;
   padding: 8px 10px 10px;
   white-space: nowrap;
+  max-height: 64px;
+  opacity: 1;
+  transition: max-height 180ms ease, padding 180ms ease, opacity 140ms ease;
 }
 
 .folder-btn,
