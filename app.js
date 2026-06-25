@@ -64,6 +64,8 @@ let view = {
   selectedChatIds: [],
   scannerOpen: false,
   scannerStatus: "กำลังเตรียมกล้อง...",
+  chatSettingsOpen: false,
+  chatSearch: "",
   _authUser: "", _authPass: "",
 };
 
@@ -115,7 +117,7 @@ function contactFromQuery(raw) {
     username = `${username.replace(/\d+$/, "")}${Math.floor(1000 + Math.random() * 9000)}`.slice(0, 24);
     handle = handleFromUsername(username);
   }
-  const user = { id: handle, username, displayName: username, password: "", avatar: "", blocked: [], localContact: true };
+  const user = { id: handle, username, displayName: username, password: "1234", avatar: "", blocked: [], localContact: true };
   state.users.push(user);
   saveState();
   return user;
@@ -150,6 +152,15 @@ function switchToChatMember(chatId, userId) {
   });
   saveState();
   render();
+}
+function activeChat() {
+  return state.chats.find(c => c.id === view.chatId && c.members.includes(sessionId)) || null;
+}
+function chatFiles(chat) {
+  return visibleMessages(chat).filter(m => m.file);
+}
+function chatPhotos(chat) {
+  return chatFiles(chat).filter(m => m.file.type?.startsWith("image/"));
 }
 function migrateStateIds(data) {
   const idMap = new Map();
@@ -446,7 +457,8 @@ function renderApp(user) {
   ${renderBottomNav()}
 </section>
 ${renderModal()}
-${renderScanner()}`;
+${renderScanner()}
+${renderChatSettings(selected)}`;
 }
 
 function renderRail(user) {
@@ -570,7 +582,7 @@ function renderChat(chat) {
       ${otherId ? `<button class="mini" data-action="switch-side" data-chat="${chat.id}" data-user="${otherId}">สลับฝั่ง</button>` : ""}
       <button class="icon-btn" data-action="call"><i data-lucide="phone"></i></button>
       <button class="icon-btn" data-action="call"><i data-lucide="video"></i></button>
-      <button class="icon-btn" data-action="detail-tab" data-tab="${chat.type==="group"?"groups":"people"}"><i data-lucide="panel-right"></i></button>
+      <button class="icon-btn" data-action="open-chat-settings"><i data-lucide="menu"></i></button>
     </div>
   </header>
   <div class="messages">
@@ -821,6 +833,44 @@ function renderModal() {
 function renderScanner() {
   return `<div class="modal-backdrop${view.scannerOpen?" show":""}" id="qr-scanner"><div class="modal scanner-modal"><h2>สแกน QR Code</h2><div class="scanner-frame"><video id="qr-video" playsinline muted></video><div class="scan-corners"></div></div><p class="hint">${esc(view.scannerStatus)}</p><label class="field">หรือพิมพ์ @username<input value="${esc(view.qrInput)}" data-action="qr-input" placeholder="@mali" /></label><div class="modal-actions"><button class="ghost" data-action="close-scanner">ปิด</button><button class="primary" data-action="add-by-qr">เพิ่มเพื่อน</button></div></div></div>`;
 }
+function renderChatSettings(chat) {
+  if (!chat || !view.chatSettingsOpen) return "";
+  const otherId = chat.type === "direct" ? chat.members.find(id => id !== sessionId) : "";
+  const q = view.chatSearch.trim().toLowerCase();
+  const results = q ? visibleMessages(chat).filter(m => `${m.text || ""} ${m.file?.name || ""}`.toLowerCase().includes(q)) : [];
+  const photos = chatPhotos(chat);
+  const files = chatFiles(chat);
+  const muted = chat.mutedFor?.includes(sessionId);
+  return `<div class="modal-backdrop show"><div class="modal chat-settings-modal">
+    <div class="section-head modal-head">
+      <strong>ตั้งค่าแชท</strong>
+      <button class="icon-btn" data-action="close-chat-settings"><i data-lucide="x"></i></button>
+    </div>
+    <div class="stack">
+      <div class="block">
+        <h3>${esc(chatName(chat))}</h3>
+        <div class="inline">
+          <button class="ghost" data-action="toggle-mute-chat" data-chat="${chat.id}"><i data-lucide="${muted ? "bell" : "bell-off"}"></i>${muted ? "เปิดเสียง" : "ปิดเสียง"}</button>
+          <button class="ghost" data-action="open-invite" data-chat="${chat.id}"><i data-lucide="user-plus"></i>เชิญ</button>
+          ${otherId ? `<button class="ghost danger" data-action="block-user" data-user="${otherId}"><i data-lucide="ban"></i>บล็อก</button>` : ""}
+        </div>
+      </div>
+      <div class="block">
+        <h3>ค้นหาในแชท</h3>
+        <input value="${esc(view.chatSearch)}" data-action="chat-settings-search" placeholder="ค้นหาข้อความหรือชื่อไฟล์" />
+        ${q ? (results.length ? results.map(m => `<button class="result-row result-button" data-action="jump-message" data-message="${m.id}"><span><strong>${esc(m.file?.name || m.text || "ข้อความ")}</strong><span class="small">${formatTime(m.createdAt)}</span></span><i data-lucide="search"></i></button>`).join("") : `<p class="empty">ไม่พบข้อความ</p>`) : `<p class="hint">พิมพ์คำที่ต้องการค้นหา</p>`}
+      </div>
+      <div class="block">
+        <h3>รูปที่เคยส่ง</h3>
+        <div class="photo-grid">${photos.length ? photos.map(m => `<img src="${esc(m.file.url)}" alt="${esc(m.file.name)}" />`).join("") : `<p class="empty">ยังไม่มีรูป</p>`}</div>
+      </div>
+      <div class="block">
+        <h3>ไฟล์ที่เคยส่ง</h3>
+        ${files.length ? files.map(m => `<div class="result-row"><span><strong>${esc(m.file.name)}</strong><span class="small">${formatTime(m.createdAt)}</span></span><i data-lucide="${fileIcon(m.file.name)}"></i></div>`).join("") : `<p class="empty">ยังไม่มีไฟล์</p>`}
+      </div>
+    </div>
+  </div></div>`;
+}
 
 // ─── Collapsing header ────────────────────────────────────────
 function setupCollapsingHeader() {
@@ -882,6 +932,7 @@ app.addEventListener("input", e => {
   if (action==="group-draft")     view.groupDraft     = e.target.value;
   if (action==="group-member-draft") view.groupMemberDraft = e.target.value;
   if (action==="qr-input")        view.qrInput        = e.target.value;
+  if (action==="chat-settings-search") { view.chatSearch = e.target.value; render(); }
   if (action==="auth-tab-user")   view._authUser      = e.target.value;
   if (action==="auth-tab-pass")   view._authPass      = e.target.value;
 });
@@ -950,6 +1001,30 @@ app.addEventListener("click", e => {
     if (chat) { chat.unread[sessionId]=0; chat.importantUnread[sessionId]=0; chat.messages.forEach(m=>{if(m.senderId!==sessionId&&!m.readAt)m.readAt=Date.now();}); saveState(); }
     render();
   }
+  if (action==="open-chat-settings") { view.chatSettingsOpen=true; view.chatSearch=""; render(); }
+  if (action==="close-chat-settings") { view.chatSettingsOpen=false; view.chatSearch=""; render(); }
+  if (action==="toggle-mute-chat") {
+    const chat=state.chats.find(c=>c.id===t.dataset.chat);
+    if (chat) {
+      const muted=chat.mutedFor?.includes(sessionId);
+      chat.mutedFor=muted ? (chat.mutedFor||[]).filter(id=>id!==sessionId) : unique([...(chat.mutedFor||[]),sessionId]);
+      saveState(); render();
+    }
+  }
+  if (action==="open-invite") {
+    const chat=state.chats.find(c=>c.id===t.dataset.chat);
+    if (chat?.type==="direct") {
+      const otherId=chat.members.find(id=>id!==sessionId);
+      const other=byId(otherId);
+      const group={id:makeId("group"),type:"group",name:`${userName(currentUser())}, ${userName(other)}`,photo:"",members:unique([sessionId,otherId]),tags:["Group"],unread:{},importantUnread:{},updatedAt:Date.now(),messages:[]};
+      state.chats.push(group); view.chatSettingsOpen=false; view.folder="Group"; view.chatId=group.id; view.screen="chat"; saveState(); render();
+    } else if (chat?.type==="group") {
+      view.chatSettingsOpen=false; view.detailTab="groups"; view.screen="tools"; render();
+    }
+  }
+  if (action==="jump-message") {
+    view.chatSettingsOpen=false; view.chatSearch=""; render();
+  }
   if (action==="detail-tab") {
     if (t.classList.contains("profile-button")&&document.querySelector(".app-shell")?.classList.contains("header-compact")) {
       document.querySelector(".app-shell")?.classList.toggle("folder-peek"); return;
@@ -982,7 +1057,7 @@ app.addEventListener("click", e => {
   if (action==="block-user") {
     const user=currentUser(); user.blocked=unique([...(user.blocked||[]),t.dataset.user]);
     state.chats=state.chats.filter(c=>!(c.type==="direct"&&c.members.includes(sessionId)&&c.members.includes(t.dataset.user)));
-    view.chatId=null; saveState(); render();
+    view.chatSettingsOpen=false; view.chatId=null; saveState(); render();
   }
   if (action==="delete-self") {
     const chat=state.chats.find(c=>c.id===t.dataset.chat);

@@ -300,6 +300,7 @@ select:focus {
 .screen-list .content-page,
 .screen-chat .chat-list,
 .screen-chat .detail,
+.screen-chat .rail,
 .screen-chat .home-page,
 .screen-chat .content-page,
 .screen-tools .chat-list,
@@ -326,7 +327,7 @@ select:focus {
 }
 
 .screen-chat {
-  grid-template-rows: auto 1fr;
+  grid-template-rows: 1fr;
 }
 
 .screen-chat .bottom-nav {
@@ -680,7 +681,13 @@ select:focus {
 
 .chat-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.chat-actions .mini {
+  height: 34px;
+  white-space: nowrap;
 }
 
 .messages {
@@ -1280,6 +1287,23 @@ select:focus {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+
+.chat-settings-modal {
+  max-height: min(760px, 88dvh);
+  overflow: auto;
+  padding: 0;
+}
+
+.chat-settings-modal .modal-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--white);
+}
+
+.chat-settings-modal .stack {
+  padding: 14px;
 }
 
 @media (min-width: 900px) {
