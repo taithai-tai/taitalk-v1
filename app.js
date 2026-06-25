@@ -38,8 +38,11 @@ const DEFAULT_FOLDERS = ["Main", "Important", "Advertising", "Request", "Group",
 const STORAGE_KEY = "taitalk:v1:mobile";
 const app = document.querySelector("#app");
 
-let state = loadState();
+// ต้อง declare ก่อน loadState() เพื่อให้ migrateIds() อัปเดตได้
 let sessionId = localStorage.getItem("taitalk:session");
+let state = loadState();
+// หลัง migrateIds() ทำงาน localStorage อาจถูกอัปเดต ให้อ่านใหม่
+sessionId = localStorage.getItem("taitalk:session");
 let view = {
   authMode: "register",
   screen: "home",
@@ -1468,15 +1471,20 @@ app.addEventListener("submit", (event) => {
     sendMessage(input.value, view.pendingFile);
   }
   if (action === "submit-add-friend") {
-    // อ่านค่าจาก input โดยตรงก่อน render (เพราะ view.addFriendQuery อาจล้าหลัง)
     const input = event.target.querySelector("[data-action='add-friend-query']");
     if (input) view.addFriendQuery = input.value;
     const raw = view.addFriendQuery.trim().toLowerCase().replace(/^@+/, "");
     if (!raw) return;
+    // ค้นหาด้วย username (ไม่ต้องใส่ @)
     const found = state.users.find(
-      (u) => u.id !== sessionId && u.username.toLowerCase() === raw
+      (u) => u.username.toLowerCase() === raw
     );
-    if (!found || isBlocked(sessionId, found.id)) {
+    if (!found) {
+      view.addFriendResult = "notfound";
+    } else if (found.id === sessionId) {
+      // เจอตัวเอง — แสดง card ปกติแต่บอกว่า "นี่คือคุณ"
+      view.addFriendResult = found;
+    } else if (isBlocked(sessionId, found.id)) {
       view.addFriendResult = "notfound";
     } else {
       view.addFriendResult = found;
@@ -1717,11 +1725,12 @@ app.addEventListener("click", (event) => {
   if (action === "search-add-friend") {
     const raw = view.addFriendQuery.trim().toLowerCase().replace(/^@+/, "");
     if (!raw) { render(); return; }
-    // ค้นหาด้วย username เท่านั้น (ไม่ใช่ id)
     const found = state.users.find(
-      (u) => u.id !== sessionId && u.username.toLowerCase() === raw
+      (u) => u.username.toLowerCase() === raw
     );
-    if (!found || isBlocked(sessionId, found.id)) {
+    if (!found) {
+      view.addFriendResult = "notfound";
+    } else if (isBlocked(sessionId, found.id)) {
       view.addFriendResult = "notfound";
     } else {
       view.addFriendResult = found;
