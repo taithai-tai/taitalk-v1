@@ -4,6 +4,8 @@ TaiTalk V1 is a local-first LINE-style chat prototype that implements the final 
 
 - Username/password registration with password confirmation
 - Immutable User ID and editable Username
+- ADD-prefixed user IDs for friend search
+- Profile photo upload and persistent avatar display
 - Friend search by Username or User ID
 - Friend add by TaiTalk QR Code
 - Real QR image generation and camera QR scanning with manual code fallback
@@ -35,6 +37,6 @@ The app now starts on the registration screen. Create a new account first, then 
 
 Test QR codes:
 
-- `TAITALK:TT-1002:mali`
-- `TAITALK:TT-1003:narin`
-- `TAITALK:TT-1004:studyteam`
+- `TAITALK:ADD-1002:mali`
+- `TAITALK:ADD-1003:narin`
+- `TAITALK:ADD-1004:studyteam`

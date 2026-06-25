@@ -1065,6 +1065,29 @@ select:focus {
   font-size: 1.4rem;
 }
 
+.profile-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+  cursor: pointer;
+}
+
+.profile-upload span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.profile-upload input {
+  display: none;
+}
+
 .qr-tools {
   display: grid;
   gap: 12px;

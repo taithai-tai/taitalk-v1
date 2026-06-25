@@ -68,9 +68,9 @@ let qrScanTimer = null;
 function defaultState() {
   return {
     users: [
-      { id: "TT-1002", username: "mali", password: "1234", avatar: "", blocked: [] },
-      { id: "TT-1003", username: "narin", password: "1234", avatar: "", blocked: [] },
-      { id: "TT-1004", username: "studyteam", password: "1234", avatar: "", blocked: [] },
+      { id: "ADD-1002", username: "mali", password: "1234", avatar: "", blocked: [] },
+      { id: "ADD-1003", username: "narin", password: "1234", avatar: "", blocked: [] },
+      { id: "ADD-1004", username: "studyteam", password: "1234", avatar: "", blocked: [] },
     ],
     friendships: [],
     customFolders: [],
@@ -104,10 +104,43 @@ function loadState() {
     merged.folderSettings = { ...base.folderSettings, ...(parsed.folderSettings || {}) };
     merged.appSettings = { ...base.appSettings, ...(parsed.appSettings || {}) };
     merged.customFolders = parsed.customFolders || [];
-    return merged;
+    return migrateIds(merged);
   } catch {
     return defaultState();
   }
+}
+
+function normalizeUserId(id) {
+  return String(id || "").replace(/^TT-/, "ADD-");
+}
+
+function migrateIds(data) {
+  const convert = (id) => normalizeUserId(id);
+  data.users = data.users.map((user) => ({
+    ...user,
+    id: convert(user.id),
+    blocked: (user.blocked || []).map(convert),
+  }));
+  data.friendships = (data.friendships || []).map((pair) => pair.map(convert));
+  data.chats = (data.chats || []).map((chat) => ({
+    ...chat,
+    members: chat.members.map(convert),
+    unread: Object.fromEntries(Object.entries(chat.unread || {}).map(([key, value]) => [convert(key), value])),
+    importantUnread: Object.fromEntries(Object.entries(chat.importantUnread || {}).map(([key, value]) => [convert(key), value])),
+    hiddenFor: (chat.hiddenFor || []).map(convert),
+    pinnedFor: (chat.pinnedFor || []).map(convert),
+    mutedFor: (chat.mutedFor || []).map(convert),
+    messages: (chat.messages || []).map((message) => ({
+      ...message,
+      senderId: convert(message.senderId),
+      hiddenFor: (message.hiddenFor || []).map(convert),
+    })),
+  }));
+  const savedSession = localStorage.getItem("taitalk:session");
+  if (savedSession?.startsWith("TT-")) {
+    localStorage.setItem("taitalk:session", convert(savedSession));
+  }
+  return data;
 }
 
 function saveState() {
@@ -287,7 +320,7 @@ function friendCode(user) {
 function userFromFriendCode(code) {
   const cleaned = String(code || "").trim();
   const parts = cleaned.split(":");
-  const id = parts.length >= 2 && parts[0].toUpperCase() === "TAITALK" ? parts[1] : cleaned;
+  const id = normalizeUserId(parts.length >= 2 && parts[0].toUpperCase() === "TAITALK" ? parts[1] : cleaned);
   return state.users.find((user) => user.id.toLowerCase() === id.toLowerCase() || friendCode(user).toLowerCase() === cleaned.toLowerCase());
 }
 
@@ -464,7 +497,7 @@ function renderRail(user) {
     <aside class="rail">
       <div class="topbar">
         <button class="profile profile-button" data-action="detail-tab" data-tab="profile">
-          <div class="avatar">${initials(user.username)}</div>
+          ${avatarHtml(user.avatar, user.username)}
           <div>
             <strong>${escapeHtml(user.username)}</strong>
             <div class="small">${user.id}</div>
@@ -851,6 +884,11 @@ function peoplePanel(selected) {
     <div class="stack">
       <div class="block">
         <h3>โปรไฟล์ของฉัน</h3>
+        <label class="profile-upload">
+          ${avatarHtml(user.avatar, user.username)}
+          <span><i data-lucide="camera"></i>เปลี่ยนรูปโปรไฟล์</span>
+          <input type="file" data-action="profile-avatar" accept="image/*" />
+        </label>
         <div class="inline">
           <input value="${escapeAttr(user.username)}" data-action="username-input" placeholder="Username ใหม่" />
           <button class="ghost" data-action="save-username"><i data-lucide="save"></i></button>
@@ -865,7 +903,7 @@ function peoplePanel(selected) {
             <button class="ghost" data-action="copy-qr"><i data-lucide="copy"></i>คัดลอก QR Code</button>
             <button class="ghost" data-action="open-scanner"><i data-lucide="camera"></i>เปิดกล้องสแกน</button>
             <label class="field">สแกนหรือวางโค้ด QR
-              <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="TAITALK:TT-1002:mali" />
+              <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="TAITALK:ADD-1002:mali" />
             </label>
             <button class="primary" data-action="add-by-qr"><i data-lucide="scan-line"></i>เพิ่มจาก QR</button>
           </div>
@@ -905,12 +943,17 @@ function profilePanel() {
   return `
     <div class="stack">
       <div class="profile-cover">
-        <div class="avatar profile-avatar">${initials(user.username)}</div>
+        ${avatarHtml(user.avatar, user.username, "profile-avatar")}
         <h2>${escapeHtml(user.username)}</h2>
         <p>${user.id}</p>
       </div>
       <div class="block">
         <h3>Display Name</h3>
+        <label class="profile-upload">
+          ${avatarHtml(user.avatar, user.username)}
+          <span><i data-lucide="image-plus"></i>เปลี่ยนรูปโปรไฟล์</span>
+          <input type="file" data-action="profile-avatar" accept="image/*" />
+        </label>
         <div class="inline">
           <input value="${escapeAttr(user.username)}" data-action="username-input" placeholder="Username ใหม่" />
           <button class="ghost" data-action="save-username"><i data-lucide="save"></i></button>
@@ -1166,7 +1209,7 @@ function renderScanner() {
         </div>
         <p class="hint">${escapeHtml(view.scannerStatus)}</p>
         <label class="field">หรือวางโค้ด QR
-          <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="TAITALK:TT-1002:mali" />
+          <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="TAITALK:ADD-1002:mali" />
         </label>
         <div class="modal-actions">
           <button class="ghost" data-action="close-scanner">ปิด</button>
@@ -1177,8 +1220,8 @@ function renderScanner() {
   `;
 }
 
-function avatarHtml(src, name) {
-  return `<span class="avatar">${src ? `<img src="${escapeAttr(src)}" alt="${escapeAttr(name)}" />` : initials(name)}</span>`;
+function avatarHtml(src, name, extraClass = "") {
+  return `<span class="avatar ${extraClass}">${src ? `<img src="${escapeAttr(src)}" alt="${escapeAttr(name)}" />` : initials(name)}</span>`;
 }
 
 function folderIcon(folder) {
@@ -1227,7 +1270,7 @@ function handleAuth(form, mode) {
   const confirm = String(data.get("confirm") || "");
   if (password !== confirm) return showAuthError("Password และ Confirm Password ต้องตรงกัน");
   if (state.users.some((item) => item.username.toLowerCase() === username.toLowerCase())) return showAuthError("Username นี้ถูกใช้แล้ว");
-  const user = { id: `TT-${Math.floor(1000 + Math.random() * 9000)}`, username, password, avatar: "", blocked: [] };
+  const user = { id: `ADD-${Math.floor(1000 + Math.random() * 9000)}`, username, password, avatar: "", blocked: [] };
   state.users.push(user);
   saveState();
   sessionId = user.id;
@@ -1348,6 +1391,21 @@ app.addEventListener("input", (event) => {
 
 app.addEventListener("change", (event) => {
   const action = event.target.dataset.action;
+  if (action === "profile-avatar") {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      alert("กรุณาเลือกรูปภาพ");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      currentUser().avatar = reader.result;
+      saveState();
+      render();
+    };
+    reader.readAsDataURL(file);
+  }
   if (action === "file-input") {
     const file = event.target.files?.[0];
     if (!file) return;
