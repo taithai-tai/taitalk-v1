@@ -112,39 +112,61 @@ function loadState() {
   }
 }
 
-function normalizeUserId(id) {
+function normalizeUserId(id, usersMap) {
   const s = String(id || "");
+  if (!s) return s;
   // Already @username format
   if (s.startsWith("@")) return s.toLowerCase();
-  // Legacy ADD-xxxx: try to find matching user by old id, else keep as-is
-  return s.replace(/^TT-/, "ADD-");
+  // Legacy TT- or ADD- format: look up in usersMap to get @username
+  const clean = s.replace(/^TT-/, "ADD-");
+  if (usersMap && usersMap[clean]) return usersMap[clean];
+  // ถ้าหาไม่เจอ แปลงเป็น @add-xxxx ชั่วคราว
+  return `@${clean.toLowerCase()}`;
 }
 
 function migrateIds(data) {
-  const convert = (id) => normalizeUserId(id);
+  // Step 1: แปลง users ที่มี ADD- format ก่อน — ต้องทำก่อนเพื่อสร้าง map
+  const usersMap = {}; // "ADD-1002" -> "@mali"
+  data.users = data.users.map((user) => {
+    if (!user.id.startsWith("@")) {
+      const oldId = user.id.replace(/^TT-/, "ADD-");
+      const newId = `@${user.username.toLowerCase()}`;
+      usersMap[oldId] = newId;
+      return { ...user, id: newId, blocked: [] };
+    }
+    return user;
+  });
+  // Step 2: แปลง blocked lists
   data.users = data.users.map((user) => ({
     ...user,
-    id: convert(user.id),
-    blocked: (user.blocked || []).map(convert),
+    blocked: (user.blocked || []).map((id) => normalizeUserId(id, usersMap)),
   }));
-  data.friendships = (data.friendships || []).map((pair) => pair.map(convert));
+  // Step 3: แปลง friendships, chats
+  const conv = (id) => normalizeUserId(id, usersMap);
+  data.friendships = (data.friendships || []).map((pair) => pair.map(conv));
   data.chats = (data.chats || []).map((chat) => ({
     ...chat,
-    members: chat.members.map(convert),
-    unread: Object.fromEntries(Object.entries(chat.unread || {}).map(([key, value]) => [convert(key), value])),
-    importantUnread: Object.fromEntries(Object.entries(chat.importantUnread || {}).map(([key, value]) => [convert(key), value])),
-    hiddenFor: (chat.hiddenFor || []).map(convert),
-    pinnedFor: (chat.pinnedFor || []).map(convert),
-    mutedFor: (chat.mutedFor || []).map(convert),
-    messages: (chat.messages || []).map((message) => ({
-      ...message,
-      senderId: convert(message.senderId),
-      hiddenFor: (message.hiddenFor || []).map(convert),
+    members: chat.members.map(conv),
+    unread: Object.fromEntries(Object.entries(chat.unread || {}).map(([k, v]) => [conv(k), v])),
+    importantUnread: Object.fromEntries(Object.entries(chat.importantUnread || {}).map(([k, v]) => [conv(k), v])),
+    hiddenFor: (chat.hiddenFor || []).map(conv),
+    pinnedFor: (chat.pinnedFor || []).map(conv),
+    mutedFor: (chat.mutedFor || []).map(conv),
+    messages: (chat.messages || []).map((msg) => ({
+      ...msg,
+      senderId: conv(msg.senderId),
+      hiddenFor: (msg.hiddenFor || []).map(conv),
     })),
   }));
+  // Step 4: แปลง sessionId ใน localStorage
   const savedSession = localStorage.getItem("taitalk:session");
-  if (savedSession?.startsWith("TT-")) {
-    localStorage.setItem("taitalk:session", convert(savedSession));
+  if (savedSession && !savedSession.startsWith("@")) {
+    const converted = conv(savedSession);
+    localStorage.setItem("taitalk:session", converted);
+    // อัปเดต sessionId ด้วยถ้ามีอยู่แล้ว
+    if (typeof sessionId !== "undefined" && sessionId === savedSession) {
+      sessionId = converted;
+    }
   }
   return data;
 }
@@ -281,10 +303,14 @@ function classifyMessage(text) {
   return "normal";
 }
 
+function userName(user) {
+  return (user?.displayName || user?.username || "Unknown");
+}
+
 function chatName(chat) {
   if (chat.type === "group") return chat.name;
   const other = chat.members.find((id) => id !== sessionId);
-  return byId(other)?.username || "Unknown";
+  return userName(byId(other));
 }
 
 function chatAvatar(chat) {
@@ -514,10 +540,10 @@ function renderRail(user) {
     <aside class="rail">
       <div class="topbar">
         <button class="profile profile-button" data-action="detail-tab" data-tab="profile">
-          ${avatarHtml(user.avatar, user.username)}
+          ${avatarHtml(user.avatar, user.displayName || user.username)}
           <div>
-            <strong>${escapeHtml(user.username)}</strong>
-            <div class="small">${user.id}</div>
+            <strong>${escapeHtml(user.displayName || user.username)}</strong>
+            <div class="small">${escapeHtml(user.id)}</div>
           </div>
         </button>
         <div class="top-actions">
@@ -899,11 +925,12 @@ function peoplePanel(selected) {
     const found = view.addFriendResult;
     const isFriend = areFriends(user.id, found.id);
     const isMe = found.id === sessionId;
+    const foundName = found.displayName || found.username;
     addResultHtml = `
       <div class="add-friend-card">
-        ${avatarHtml(found.avatar, found.username, "add-friend-avatar")}
+        ${avatarHtml(found.avatar, foundName, "add-friend-avatar")}
         <div class="add-friend-info">
-          <strong>${escapeHtml(found.username)}</strong>
+          <strong>${escapeHtml(foundName)}</strong>
           <span class="add-friend-id">${escapeHtml(found.id)}</span>
         </div>
         ${isMe
@@ -948,9 +975,9 @@ function peoplePanel(selected) {
         <h3>เพื่อนของฉัน (${friends.length})</h3>
         ${friends.length ? friends.map((person) => `
           <div class="result-row">
-            ${avatarHtml(person.avatar, person.username)}
+            ${avatarHtml(person.avatar, person.displayName || person.username)}
             <div>
-              <strong>${escapeHtml(person.username)}</strong>
+              <strong>${escapeHtml(person.displayName || person.username)}</strong>
               <div class="small">${escapeHtml(person.id)}</div>
             </div>
             <button class="ghost" data-action="open-user-chat" data-user="${person.id}">
@@ -985,25 +1012,37 @@ function peoplePanel(selected) {
 
 function profilePanel() {
   const user = currentUser();
+  const displayName = user.displayName || user.username;
   return `
     <div class="stack">
       <div class="profile-cover">
-        ${avatarHtml(user.avatar, user.username, "profile-avatar")}
-        <h2>${escapeHtml(user.username)}</h2>
-        <p>${user.id}</p>
+        ${avatarHtml(user.avatar, displayName, "profile-avatar")}
+        <h2>${escapeHtml(displayName)}</h2>
+        <p class="profile-id">${escapeHtml(user.id)}</p>
       </div>
       <div class="block">
-        <h3>Display Name</h3>
+        <h3>รูปโปรไฟล์</h3>
         <label class="profile-upload">
-          ${avatarHtml(user.avatar, user.username)}
+          ${avatarHtml(user.avatar, displayName)}
           <span><i data-lucide="image-plus"></i>เปลี่ยนรูปโปรไฟล์</span>
           <input type="file" data-action="profile-avatar" accept="image/*" />
         </label>
-        <div class="inline">
-          <input value="${escapeAttr(user.username)}" data-action="username-input" placeholder="Username ใหม่" />
-          <button class="ghost" data-action="save-username"><i data-lucide="save"></i></button>
+      </div>
+      <div class="block">
+        <h3>ชื่อที่แสดง</h3>
+        <form class="inline" data-action="save-displayname">
+          <input name="displayname" value="${escapeAttr(displayName)}" placeholder="ชื่อที่ต้องการแสดง" autocomplete="off" />
+          <button class="primary" type="submit"><i data-lucide="save"></i>บันทึก</button>
+        </form>
+        <p class="hint">ชื่อที่เพื่อนจะเห็น เปลี่ยนได้ตลอด</p>
+      </div>
+      <div class="block">
+        <h3>TaiTalk ID</h3>
+        <div class="profile-id-row">
+          <code class="id-badge">${escapeHtml(user.id)}</code>
+          <button class="ghost" data-action="copy-id"><i data-lucide="copy"></i>คัดลอก</button>
         </div>
-        <p class="hint">Status: ใช้งาน TaiTalk</p>
+        <p class="hint">ID นี้ใช้ให้เพื่อนค้นหาคุณ เปลี่ยนไม่ได้</p>
       </div>
       <div class="block">
         <h3>QR Code</h3>
@@ -1444,15 +1483,32 @@ app.addEventListener("submit", (event) => {
     }
     render();
   }
+  if (action === "save-displayname") {
+    const input = event.target.elements.displayname;
+    const next = input?.value.trim();
+    if (!next) return;
+    currentUser().displayName = next;
+    saveState();
+    render();
+  }
+});
+
+app.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  const action = event.target.dataset.action;
+  if (action === "chat-search") {
+    event.preventDefault();
+    view.screen = "list";
+    view.manageMode = false;
+    render();
+  }
 });
 
 app.addEventListener("input", (event) => {
   const action = event.target.dataset.action;
   if (action === "chat-search") {
+    // เก็บค่าไว้เฉยๆ ไม่ render — รอกด Enter หรือปุ่มค้นหา
     view.search = event.target.value;
-    view.screen = "list";
-    view.manageMode = false;
-    render();
   }
   if (action === "add-friend-query") {
     // เก็บค่าไว้ แต่ไม่ render ทุก keystroke — รอกด "ค้นหา" ก่อน
@@ -1461,8 +1517,7 @@ app.addEventListener("input", (event) => {
   }
   if (action === "people-search") {
     view.peopleSearch = event.target.value;
-    view.detailTab = "people";
-    render();
+    // ไม่ render ทุก keystroke
   }
   if (action === "new-folder-name") view.newFolderName = event.target.value;
   if (action === "group-draft") view.groupDraft = event.target.value;
@@ -1726,6 +1781,14 @@ app.addEventListener("click", (event) => {
   }
   if (action === "add-by-qr") {
     addFriendFromCode(view.qrInput);
+  }
+  if (action === "copy-id") {
+    const code = currentUser().id;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(code).then(() => alert("คัดลอก ID แล้ว"));
+    } else {
+      window.prompt("คัดลอก TaiTalk ID", code);
+    }
   }
   if (action === "copy-qr") {
     const code = friendCode(currentUser());
