@@ -103,6 +103,37 @@ function findUserByFriendQuery(raw) {
     return id.replace(/^@+/, "") === q || handle === q || legacyAdd === q || String(user.username || "").toLowerCase() === q || String(user.displayName || "").toLowerCase() === q;
   }) || null;
 }
+function contactFromQuery(raw) {
+  const q = parseFriendQuery(raw);
+  if (!q) return null;
+  const existing = findUserByFriendQuery(q);
+  if (existing) return existing;
+  let username = q.replace(/[^a-z0-9._]/g, "").slice(0, 24);
+  if (username.length < 3) username = `friend${Math.floor(1000 + Math.random() * 9000)}`;
+  let handle = handleFromUsername(username);
+  while (state.users.some((user) => user.id === handle || user.username === username)) {
+    username = `${username.replace(/\d+$/, "")}${Math.floor(1000 + Math.random() * 9000)}`.slice(0, 24);
+    handle = handleFromUsername(username);
+  }
+  const user = { id: handle, username, displayName: username, password: "", avatar: "", blocked: [], localContact: true };
+  state.users.push(user);
+  saveState();
+  return user;
+}
+function addAndOpenFriend(otherId) {
+  if (!otherId || otherId === sessionId || isBlocked(sessionId, otherId)) return false;
+  addFriendPair(sessionId, otherId);
+  const chat = ensureChatForUser(otherId);
+  if (chat.tags.includes("Request")) chat.tags = ["Main"];
+  view.addFriendResult = null;
+  view.addFriendQuery = "";
+  view.folder = "Main";
+  view.chatId = chat.id;
+  view.screen = "chat";
+  saveState();
+  render();
+  return true;
+}
 function migrateStateIds(data) {
   const idMap = new Map();
   for (const user of data.users || []) {
@@ -284,7 +315,7 @@ function showAuthError(msg) {
 function doFriendSearch(raw) {
   const q = parseFriendQuery(raw);
   if (!q) return;
-  const found = findUserByFriendQuery(raw);
+  const found = contactFromQuery(raw);
   if (!found) { view.addFriendResult="notfound"; return; }
   if (isBlocked(sessionId, found.id)) { view.addFriendResult="notfound"; return; }
   view.addFriendResult = found;
@@ -343,13 +374,11 @@ function stopQrScanner() {
   if (qrStream) { qrStream.getTracks().forEach(t=>t.stop()); qrStream=null; }
 }
 function addFriendFromQr(code) {
-  const other = findUserByFriendQuery(code);
+  const other = contactFromQuery(code);
   if (!other||other.id===sessionId||isBlocked(sessionId,other.id)) { alert("ไม่พบผู้ใช้จาก QR นี้"); return; }
-  addFriendPair(sessionId,other.id);
-  const chat = ensureChatForUser(other.id);
-  if (chat.tags.includes("Request")) chat.tags=["Main"];
-  view.qrInput=""; view.folder="Main"; view.chatId=chat.id; view.screen="chat"; view.scannerOpen=false;
-  stopQrScanner(); saveState(); render();
+  view.qrInput=""; view.scannerOpen=false;
+  stopQrScanner();
+  addAndOpenFriend(other.id);
 }
 
 // ─── Render ───────────────────────────────────────────────────
@@ -600,6 +629,7 @@ function peoplePanel(selected) {
   const user = currentUser();
   const currentOther = selected?.type==="direct"?selected.members.find(id=>id!==sessionId):null;
   const friends = state.users.filter(u => u.id!==sessionId && areFriends(user.id, u.id));
+  const suggested = state.users.filter(u => u.id!==sessionId && !areFriends(user.id, u.id) && !isBlocked(user.id, u.id));
 
   // ผล search
   let resultHtml = "";
@@ -641,6 +671,15 @@ function peoplePanel(selected) {
       <div><strong>${esc(userName(f))}</strong><div class="small">${esc(f.id)}</div></div>
       <button class="ghost" data-action="open-user-chat" data-user="${f.id}"><i data-lucide="message-circle"></i>แชท</button>
     </div>`).join("") : `<p class="empty">ยังไม่มีเพื่อน</p>`}
+  </div>
+  <div class="block">
+    <h3>เพิ่มจากรายชื่อแนะนำ</h3>
+    ${suggested.length ? suggested.map(f=>`
+    <div class="result-row">
+      ${avatarHtml(f.avatar,userName(f))}
+      <div><strong>${esc(userName(f))}</strong><div class="small">${esc(f.id)}</div></div>
+      <button class="primary" data-action="do-add-friend" data-user="${f.id}"><i data-lucide="user-plus"></i>เพิ่ม</button>
+    </div>`).join("") : `<p class="empty">ไม่มีรายชื่อแนะนำ</p>`}
   </div>
   ${currentOther?`<div class="block"><h3>${esc(userName(byId(currentOther)))}</h3>
     <button class="ghost danger" data-action="block-user" data-user="${currentOther}"><i data-lucide="ban"></i>บล็อกผู้ใช้นี้</button>
@@ -910,13 +949,7 @@ app.addEventListener("click", e => {
     navigator.clipboard?.writeText(code).then(()=>alert("คัดลอก @username แล้ว: "+code))||window.prompt("TaiTalk Username",code);
   }
   if (action==="do-add-friend") {
-    const otherId=t.dataset.user;
-    addFriendPair(sessionId,otherId);
-    const chat=ensureChatForUser(otherId);
-    if (chat.tags.includes("Request")) chat.tags=["Main"];
-    view.addFriendResult=null; view.addFriendQuery="";
-    view.folder="Main"; view.chatId=chat.id; view.screen="chat";
-    saveState(); render();
+    addAndOpenFriend(t.dataset.user);
   }
   if (action==="open-user-chat") {
     const chat=ensureChatForUser(t.dataset.user);
