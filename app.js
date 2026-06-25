@@ -481,7 +481,11 @@ function renderRail(user) {
         <div class="global-search">
           <i data-lucide="search"></i>
           <input value="${escapeAttr(view.search)}" data-action="chat-search" placeholder="${ui("ค้นหา User ID หรือข้อความ", "Search User ID or messages")}" />
-          ${view.search.trim() ? `<button class="search-submit" data-action="submit-search">${ui("ค้นหา", "Search")}</button>` : ""}
+          ${
+            view.search.trim()
+              ? `<button class="search-submit" data-action="submit-search">${ui("ค้นหา", "Search")}</button>`
+              : `<button class="icon-btn" title="สแกน QR" data-action="open-scanner"><i data-lucide="scan-line"></i></button>`
+          }
         </div>
       </div>
       <nav class="folder-list">
