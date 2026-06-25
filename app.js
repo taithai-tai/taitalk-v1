@@ -455,6 +455,8 @@ function render() {
 
 function renderAuth() {
   const isRegister = view.authMode === "register";
+  const savedUsername = escapeAttr(view._authUsername || "");
+  const savedPassword = escapeAttr(view._authPassword || "");
   app.innerHTML = `
     <section class="auth-shell">
       <div class="auth-panel">
@@ -470,8 +472,8 @@ function renderAuth() {
           <button class="${!isRegister ? "active" : ""}" data-action="auth-tab" data-mode="login">เข้าสู่ระบบ</button>
         </div>
         <form class="form" data-action="${isRegister ? "register" : "login"}">
-          <label class="field">Username<input name="username" autocomplete="username" required /></label>
-          <label class="field">Password<input name="password" type="password" autocomplete="${isRegister ? "new-password" : "current-password"}" required /></label>
+          <label class="field">Username<input name="username" value="${savedUsername}" autocomplete="username" required /></label>
+          <label class="field">Password<input name="password" type="password" value="${savedPassword}" autocomplete="${isRegister ? "new-password" : "current-password"}" required /></label>
           ${
             isRegister
               ? `<label class="field">Confirm Password<input name="confirm" type="password" autocomplete="new-password" required /></label>`
@@ -921,8 +923,8 @@ function peoplePanel(selected) {
     <div class="stack">
       <div class="block">
         <h3>เพิ่มเพื่อน</h3>
-        <p class="hint">พิมพ์ @username ของเพื่อนแล้วกดค้นหา</p>
-        <div class="add-friend-search">
+        <p class="hint">พิมพ์ username ของเพื่อนแล้วกด Enter หรือกดค้นหา</p>
+        <form class="add-friend-search" data-action="submit-add-friend">
           <div class="add-friend-input-row">
             <span class="at-prefix">@</span>
             <input
@@ -935,10 +937,10 @@ function peoplePanel(selected) {
               spellcheck="false"
             />
           </div>
-          <button class="primary" data-action="search-add-friend">
+          <button class="primary" type="submit">
             <i data-lucide="search"></i>ค้นหา
           </button>
-        </div>
+        </form>
         ${addResultHtml}
       </div>
 
@@ -1301,23 +1303,38 @@ function handleAuth(form, mode) {
   const data = new FormData(form);
   const username = String(data.get("username") || "").trim();
   const password = String(data.get("password") || "");
+  if (!username) return showAuthError("กรุณากรอก Username");
+  if (!password) return showAuthError("กรุณากรอก Password");
   if (mode === "login") {
-    const user = state.users.find((item) => item.username === username && item.password === password);
+    // login: case-insensitive username match
+    const user = state.users.find(
+      (item) => item.username.toLowerCase() === username.toLowerCase() && item.password === password
+    );
     if (!user) return showAuthError("Username หรือ Password ไม่ถูกต้อง");
     sessionId = user.id;
     view.screen = "home";
+    view._authUsername = "";
+    view._authPassword = "";
     localStorage.setItem("taitalk:session", sessionId);
     render();
     return;
   }
+  // register
+  if (!/^[a-zA-Z0-9._]+$/.test(username)) return showAuthError("Username ใช้ได้เฉพาะ a-z, 0-9, . และ _");
+  if (username.length < 3) return showAuthError("Username ต้องมีอย่างน้อย 3 ตัวอักษร");
   const confirm = String(data.get("confirm") || "");
   if (password !== confirm) return showAuthError("Password และ Confirm Password ต้องตรงกัน");
-  if (state.users.some((item) => item.username.toLowerCase() === username.toLowerCase())) return showAuthError("Username นี้ถูกใช้แล้ว");
+  if (password.length < 4) return showAuthError("Password ต้องมีอย่างน้อย 4 ตัวอักษร");
+  if (state.users.some((item) => item.username.toLowerCase() === username.toLowerCase())) {
+    return showAuthError("Username นี้ถูกใช้แล้ว");
+  }
   const user = { id: `@${username.toLowerCase()}`, username, password, avatar: "", blocked: [] };
   state.users.push(user);
   saveState();
   sessionId = user.id;
   view.screen = "home";
+  view._authUsername = "";
+  view._authPassword = "";
   localStorage.setItem("taitalk:session", sessionId);
   render();
 }
@@ -1411,6 +1428,22 @@ app.addEventListener("submit", (event) => {
     const input = event.target.elements.message;
     sendMessage(input.value, view.pendingFile);
   }
+  if (action === "submit-add-friend") {
+    // อ่านค่าจาก input โดยตรงก่อน render (เพราะ view.addFriendQuery อาจล้าหลัง)
+    const input = event.target.querySelector("[data-action='add-friend-query']");
+    if (input) view.addFriendQuery = input.value;
+    const raw = view.addFriendQuery.trim().toLowerCase().replace(/^@+/, "");
+    if (!raw) return;
+    const found = state.users.find(
+      (u) => u.id !== sessionId && u.username.toLowerCase() === raw
+    );
+    if (!found || isBlocked(sessionId, found.id)) {
+      view.addFriendResult = "notfound";
+    } else {
+      view.addFriendResult = found;
+    }
+    render();
+  }
 });
 
 app.addEventListener("input", (event) => {
@@ -1422,8 +1455,9 @@ app.addEventListener("input", (event) => {
     render();
   }
   if (action === "add-friend-query") {
+    // เก็บค่าไว้ แต่ไม่ render ทุก keystroke — รอกด "ค้นหา" ก่อน
     view.addFriendQuery = event.target.value;
-    view.addFriendResult = null; // clear result while typing
+    view.addFriendResult = null;
   }
   if (action === "people-search") {
     view.peopleSearch = event.target.value;
@@ -1499,6 +1533,11 @@ app.addEventListener("click", (event) => {
   const action = target.dataset.action;
 
   if (action === "auth-tab") {
+    // อ่านค่า input ปัจจุบันก่อน render ใหม่
+    const usernameInput = document.querySelector(".form [name='username']");
+    const passwordInput = document.querySelector(".form [name='password']");
+    view._authUsername = usernameInput?.value || "";
+    view._authPassword = passwordInput?.value || "";
     view.authMode = target.dataset.mode;
     render();
   }
@@ -1622,12 +1661,12 @@ app.addEventListener("click", (event) => {
   }
   if (action === "search-add-friend") {
     const raw = view.addFriendQuery.trim().toLowerCase().replace(/^@+/, "");
-    if (!raw) return;
-    const query = `@${raw}`;
+    if (!raw) { render(); return; }
+    // ค้นหาด้วย username เท่านั้น (ไม่ใช่ id)
     const found = state.users.find(
-      (u) => u.id.toLowerCase() === query || u.username.toLowerCase() === raw
+      (u) => u.id !== sessionId && u.username.toLowerCase() === raw
     );
-    if (!found || isBlocked(sessionId, found?.id)) {
+    if (!found || isBlocked(sessionId, found.id)) {
       view.addFriendResult = "notfound";
     } else {
       view.addFriendResult = found;
