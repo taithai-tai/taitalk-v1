@@ -730,8 +730,8 @@ app.addEventListener("submit", e => {
     input.value = "";
   }
   if (action==="do-search-friend") {
-    // อ่านค่าจาก input ตรงๆ ไม่ผ่าน view
-    const q = e.target.elements.q?.value || "";
+    const input = e.target.querySelector(".add-friend-input");
+    const q = (input?.value || "").trim();
     view.addFriendQuery = q;
     doFriendSearch(q);
     render();
