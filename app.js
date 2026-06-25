@@ -1474,15 +1474,17 @@ app.addEventListener("submit", (event) => {
     const input = event.target.querySelector("[data-action='add-friend-query']");
     if (input) view.addFriendQuery = input.value;
     const raw = view.addFriendQuery.trim().toLowerCase().replace(/^@+/, "");
+    console.log("[search] raw:", raw);
+    console.log("[search] all users:", state.users.map(u => u.username + " / " + u.id));
+    console.log("[search] sessionId:", sessionId);
     if (!raw) return;
-    // ค้นหาด้วย username (ไม่ต้องใส่ @)
     const found = state.users.find(
       (u) => u.username.toLowerCase() === raw
     );
+    console.log("[search] found:", found);
     if (!found) {
       view.addFriendResult = "notfound";
     } else if (found.id === sessionId) {
-      // เจอตัวเอง — แสดง card ปกติแต่บอกว่า "นี่คือคุณ"
       view.addFriendResult = found;
     } else if (isBlocked(sessionId, found.id)) {
       view.addFriendResult = "notfound";
