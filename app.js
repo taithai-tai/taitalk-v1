@@ -134,6 +134,23 @@ function addAndOpenFriend(otherId) {
   render();
   return true;
 }
+function switchToChatMember(chatId, userId) {
+  const chat = state.chats.find(c => c.id === chatId && c.members.includes(userId));
+  if (!chat || !byId(userId)) return;
+  sessionId = userId;
+  localStorage.setItem(SESSION_KEY, sessionId);
+  view.chatId = chat.id;
+  view.folder = chat.tags.includes("Request") ? "Request" : chat.tags.includes("Main") ? "Main" : chat.tags[0] || "Main";
+  view.screen = "chat";
+  view.manageMode = false;
+  chat.unread[sessionId] = 0;
+  chat.importantUnread[sessionId] = 0;
+  chat.messages.forEach(m => {
+    if (m.senderId !== sessionId && !m.readAt) m.readAt = Date.now();
+  });
+  saveState();
+  render();
+}
 function migrateStateIds(data) {
   const idMap = new Map();
   for (const user of data.users || []) {
@@ -541,6 +558,7 @@ function renderChatRow(chat) {
 
 function renderChat(chat) {
   const messages = visibleMessages(chat);
+  const otherId = chat.type === "direct" ? chat.members.find(id => id !== sessionId) : "";
   return `<section class="chat">
   <header class="chat-head">
     <div class="chat-title">
@@ -549,6 +567,7 @@ function renderChat(chat) {
       <div><strong>${esc(chatName(chat))}</strong><div class="small">${chat.type==="group"?`${chat.members.length} สมาชิก`:esc(byId(chat.members.find(id=>id!==sessionId))?.id||"")}</div></div>
     </div>
     <div class="chat-actions">
+      ${otherId ? `<button class="mini" data-action="switch-side" data-chat="${chat.id}" data-user="${otherId}">สลับฝั่ง</button>` : ""}
       <button class="icon-btn" data-action="call"><i data-lucide="phone"></i></button>
       <button class="icon-btn" data-action="call"><i data-lucide="video"></i></button>
       <button class="icon-btn" data-action="detail-tab" data-tab="${chat.type==="group"?"groups":"people"}"><i data-lucide="panel-right"></i></button>
@@ -947,6 +966,9 @@ app.addEventListener("click", e => {
   if (action==="copy-id") {
     const code=currentUser()?.id||"";
     navigator.clipboard?.writeText(code).then(()=>alert("คัดลอก @username แล้ว: "+code))||window.prompt("TaiTalk Username",code);
+  }
+  if (action==="switch-side") {
+    switchToChatMember(t.dataset.chat, t.dataset.user);
   }
   if (action==="do-add-friend") {
     addAndOpenFriend(t.dataset.user);
