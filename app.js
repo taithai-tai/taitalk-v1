@@ -392,7 +392,7 @@ function searchedUsers() {
   if (!q) return [];
   return state.users
     .filter((user) => user.id !== sessionId && !isBlocked(sessionId, user.id))
-    .filter((user) => `${user.username} ${user.id}`.toLowerCase().includes(q));
+    .filter((user) => user.id.toLowerCase().includes(q) || user.username.toLowerCase().includes(q));
 }
 
 function render() {
@@ -480,8 +480,8 @@ function renderRail(user) {
       <div class="search-wrap">
         <div class="global-search">
           <i data-lucide="search"></i>
-          <input value="${escapeAttr(view.search)}" data-action="chat-search" placeholder="${ui("ค้นหาเพื่อน ID หรือข้อความในแชท", "Search users, IDs, or chat messages")}" />
-          <button class="icon-btn" title="สแกน QR" data-action="open-scanner"><i data-lucide="scan-line"></i></button>
+          <input value="${escapeAttr(view.search)}" data-action="chat-search" placeholder="${ui("ค้นหา User ID หรือข้อความ", "Search User ID or messages")}" />
+          ${view.search.trim() ? `<button class="search-submit" data-action="submit-search">${ui("ค้นหา", "Search")}</button>` : ""}
         </div>
       </div>
       <nav class="folder-list">
@@ -642,11 +642,13 @@ function renderBulkBar() {
 function renderUserResult(user) {
   const friend = areFriends(sessionId, user.id);
   return `
-    <button class="user-result" data-action="${friend ? "open-user-chat" : "add-friend"}" data-user="${user.id}">
+    <div class="user-result">
       ${avatarHtml(user.avatar, user.username)}
       <span><strong>${escapeHtml(user.username)}</strong><small>${user.id}</small></span>
-      <i data-lucide="${friend ? "message-circle" : "user-plus"}"></i>
-    </button>
+      <button class="mini ${friend ? "" : "add-mini"}" data-action="${friend ? "open-user-chat" : "add-friend"}" data-user="${user.id}">
+        ${friend ? ui("แชท", "Chat") : ui("เพิ่ม", "Add")}
+      </button>
+    </div>
   `;
 }
 
@@ -1415,6 +1417,11 @@ app.addEventListener("click", (event) => {
     view.screen = "list";
     view.manageMode = !view.manageMode;
     view.selectedChatIds = [];
+    render();
+  }
+  if (action === "submit-search") {
+    view.screen = "list";
+    view.manageMode = false;
     render();
   }
   if (action === "toggle-chat-select") {

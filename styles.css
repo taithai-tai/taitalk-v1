@@ -149,6 +149,16 @@ select {
   background: var(--white);
 }
 
+.search-submit {
+  min-height: 32px;
+  padding: 0 13px;
+  border-radius: 999px;
+  color: var(--white);
+  background: var(--green);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
 .global-search input {
   border: 0;
   padding: 8px 0;
@@ -597,6 +607,12 @@ select:focus {
   background: var(--white);
   border-bottom: 1px solid var(--line);
   text-align: left;
+}
+
+.add-mini {
+  color: var(--white);
+  background: var(--green);
+  border-color: var(--green);
 }
 
 .user-result small {
