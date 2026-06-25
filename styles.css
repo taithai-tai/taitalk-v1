@@ -1319,7 +1319,7 @@ select:focus {
   }
 }
 
-/* ── Add Friend Search (v2 ID/username system) ── */
+/* ── Add Friend Search (v2 @username system) ── */
 .add-friend-search {
   display: flex;
   gap: 8px;
@@ -1421,7 +1421,7 @@ select:focus {
   flex-shrink: 0;
 }
 
-/* ── Profile ID display ── */
+/* ── Profile username display ── */
 .profile-id {
   font-size: 0.85rem;
   color: var(--muted, #888);

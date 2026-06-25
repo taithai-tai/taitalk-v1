@@ -11,9 +11,9 @@ let didMigrateState = false;
 function defaultState() {
   return {
     users: [
-      { id: "ADD-1002", username: "mali",      displayName: "Mali",       password: "1234", avatar: "", blocked: [] },
-      { id: "ADD-1003", username: "narin",     displayName: "Narin",      password: "1234", avatar: "", blocked: [] },
-      { id: "ADD-1004", username: "studyteam", displayName: "Study Team", password: "1234", avatar: "", blocked: [] },
+      { id: "@mali",      username: "mali",      displayName: "Mali",       password: "1234", avatar: "", blocked: [] },
+      { id: "@narin",     username: "narin",     displayName: "Narin",      password: "1234", avatar: "", blocked: [] },
+      { id: "@studyteam", username: "studyteam", displayName: "Study Team", password: "1234", avatar: "", blocked: [] },
     ],
     friendships: [],
     customFolders: [],
@@ -75,20 +75,17 @@ function esc(v) {
 }
 function unique(arr) { return [...new Set(arr)]; }
 function makeId(p) { return `${p}-${Math.random().toString(36).slice(2,8)}-${Date.now().toString(36)}`; }
-function stableAddId(seed) {
-  let hash = 0;
-  for (const char of String(seed || "user").toLowerCase()) hash = ((hash * 31) + char.charCodeAt(0)) % 9000;
-  return `ADD-${1000 + hash}`;
+function handleFromUsername(username) {
+  return `@${String(username || "user").trim().toLowerCase().replace(/^@+/, "")}`;
 }
-function legacyIdToAdd(id, username = "") {
+function legacyIdToHandle(id, username = "") {
   const raw = String(id || "").trim();
-  if (/^ADD-\d+/i.test(raw)) return raw.toUpperCase();
-  if (/^TT-\d+/i.test(raw)) return raw.replace(/^TT-/i, "ADD-").toUpperCase();
-  const handle = raw.startsWith("@") ? raw.slice(1).toLowerCase() : String(username || raw).toLowerCase();
-  if (handle === "mali") return "ADD-1002";
-  if (handle === "narin") return "ADD-1003";
-  if (handle === "studyteam") return "ADD-1004";
-  return stableAddId(handle);
+  if (username) return handleFromUsername(username);
+  if (raw.startsWith("@")) return handleFromUsername(raw);
+  if (/^(ADD|TT)-1002$/i.test(raw)) return "@mali";
+  if (/^(ADD|TT)-1003$/i.test(raw)) return "@narin";
+  if (/^(ADD|TT)-1004$/i.test(raw)) return "@studyteam";
+  return handleFromUsername(raw);
 }
 function parseFriendQuery(raw) {
   const cleaned = String(raw || "").trim();
@@ -99,22 +96,24 @@ function parseFriendQuery(raw) {
 function findUserByFriendQuery(raw) {
   const q = parseFriendQuery(raw);
   if (!q) return null;
-  const addId = /^tt-\d+/i.test(q) ? q.replace(/^tt-/i, "add-") : q;
   return state.users.find((user) => {
     const id = String(user.id || "").toLowerCase();
-    const legacy = legacyIdToAdd(user.id, user.username).toLowerCase();
-    return id === addId || legacy === addId || String(user.username || "").toLowerCase() === q || String(user.displayName || "").toLowerCase() === q;
+    const handle = legacyIdToHandle(user.id, user.username).toLowerCase().replace(/^@+/, "");
+    const legacyAdd = user.username === "mali" ? "add-1002" : user.username === "narin" ? "add-1003" : user.username === "studyteam" ? "add-1004" : "";
+    return id.replace(/^@+/, "") === q || handle === q || legacyAdd === q || String(user.username || "").toLowerCase() === q || String(user.displayName || "").toLowerCase() === q;
   }) || null;
 }
 function migrateStateIds(data) {
   const idMap = new Map();
+  for (const user of data.users || []) {
+    idMap.set(user.id, legacyIdToHandle(user.id, user.username));
+  }
   data.users = (data.users || []).map((user) => {
-    const nextId = legacyIdToAdd(user.id, user.username);
+    const nextId = legacyIdToHandle(user.id, user.username);
     if (nextId !== user.id) didMigrateState = true;
-    idMap.set(user.id, nextId);
-    return { ...user, id: nextId, blocked: (user.blocked || []).map((id) => idMap.get(id) || legacyIdToAdd(id)) };
+    return { ...user, id: nextId, blocked: (user.blocked || []).map((id) => idMap.get(id) || legacyIdToHandle(id)) };
   });
-  const convert = (id) => idMap.get(id) || legacyIdToAdd(id);
+  const convert = (id) => idMap.get(id) || legacyIdToHandle(id);
   data.friendships = (data.friendships || []).map((pair) => pair.map(convert));
   data.chats = (data.chats || []).map((chat) => ({
     ...chat,
@@ -266,8 +265,7 @@ function handleAuth(form, mode) {
   const confirm = String(data.get("confirm")||"");
   if (password!==confirm) { showAuthError("Password ไม่ตรงกัน"); return; }
   if (state.users.some(u => u.username.toLowerCase()===username.toLowerCase())) { showAuthError("Username นี้ถูกใช้แล้ว"); return; }
-  let newId = `ADD-${Math.floor(1000 + Math.random() * 9000)}`;
-  while (state.users.some((user) => user.id === newId)) newId = `ADD-${Math.floor(1000 + Math.random() * 9000)}`;
+  const newId = handleFromUsername(username);
   const user = { id:newId, username:username.toLowerCase(), displayName:username, password, avatar:"", blocked:[] };
   state.users.push(user);
   saveState();
@@ -624,12 +622,12 @@ function peoplePanel(selected) {
 
   return `<div class="stack">
   <div class="block">
-    <h3>เพิ่มเพื่อนด้วย ID หรือ Username</h3>
-    <p class="hint">พิมพ์ TaiTalk ID เช่น ADD-1002 หรือ username แล้วกดค้นหา</p>
+    <h3>เพิ่มเพื่อนด้วย @username</h3>
+    <p class="hint">พิมพ์ @mali หรือ username แล้วกดค้นหา</p>
     <form class="add-friend-search" data-action="do-search-friend">
       <div class="add-friend-input-row">
-        <span class="at-prefix">ID</span>
-        <input class="add-friend-input" name="q" placeholder="ADD-1002 หรือ username" autocomplete="off" spellcheck="false" />
+        <span class="at-prefix">@</span>
+        <input class="add-friend-input" name="q" placeholder="@username" autocomplete="off" spellcheck="false" />
       </div>
       <button class="primary" type="submit"><i data-lucide="search"></i>ค้นหา</button>
     </form>
@@ -652,7 +650,7 @@ function peoplePanel(selected) {
     <div class="qr-tools">
       ${renderQr(user)}
       <div class="stack">
-        <button class="ghost" data-action="copy-id"><i data-lucide="copy"></i>คัดลอก ID</button>
+        <button class="ghost" data-action="copy-id"><i data-lucide="copy"></i>คัดลอก @username</button>
         <button class="ghost" data-action="open-scanner"><i data-lucide="camera"></i>สแกน QR</button>
       </div>
     </div>
@@ -684,11 +682,11 @@ function profilePanel() {
     <p class="hint">ชื่อที่เพื่อนเห็น เปลี่ยนได้ตลอดเวลา</p>
   </div>
   <div class="block">
-    <h3>TaiTalk ID</h3>
+    <h3>TaiTalk Username</h3>
     <div class="profile-id-row"><code class="id-badge">${esc(user.id)}</code><button class="ghost" data-action="copy-id"><i data-lucide="copy"></i>คัดลอก</button></div>
-    <p class="hint">ID นี้ใช้ให้เพื่อนค้นหาคุณ เปลี่ยนไม่ได้</p>
+    <p class="hint">@username นี้ใช้ให้เพื่อนค้นหาคุณ เปลี่ยนไม่ได้</p>
   </div>
-  <div class="block"><h3>QR Code</h3>${renderQr(user)}<button class="primary full" data-action="copy-id"><i data-lucide="share-2"></i>แชร์ ID</button></div>
+  <div class="block"><h3>QR Code</h3>${renderQr(user)}<button class="primary full" data-action="copy-id"><i data-lucide="share-2"></i>แชร์ @username</button></div>
 </div>`;
 }
 
@@ -763,7 +761,7 @@ function renderModal() {
   return `<div class="modal-backdrop" id="modal"><div class="modal"><h2>ฟีเจอร์นี้ยังไม่พร้อม</h2><p class="hint">จะเปิดใช้งานในเวอร์ชันถัดไป</p><div class="modal-actions"><button class="primary" data-action="close-modal">ตกลง</button></div></div></div>`;
 }
 function renderScanner() {
-  return `<div class="modal-backdrop${view.scannerOpen?" show":""}" id="qr-scanner"><div class="modal scanner-modal"><h2>สแกน QR Code</h2><div class="scanner-frame"><video id="qr-video" playsinline muted></video><div class="scan-corners"></div></div><p class="hint">${esc(view.scannerStatus)}</p><label class="field">หรือพิมพ์ TaiTalk ID<input value="${esc(view.qrInput)}" data-action="qr-input" placeholder="ADD-1002" /></label><div class="modal-actions"><button class="ghost" data-action="close-scanner">ปิด</button><button class="primary" data-action="add-by-qr">เพิ่มเพื่อน</button></div></div></div>`;
+  return `<div class="modal-backdrop${view.scannerOpen?" show":""}" id="qr-scanner"><div class="modal scanner-modal"><h2>สแกน QR Code</h2><div class="scanner-frame"><video id="qr-video" playsinline muted></video><div class="scan-corners"></div></div><p class="hint">${esc(view.scannerStatus)}</p><label class="field">หรือพิมพ์ @username<input value="${esc(view.qrInput)}" data-action="qr-input" placeholder="@mali" /></label><div class="modal-actions"><button class="ghost" data-action="close-scanner">ปิด</button><button class="primary" data-action="add-by-qr">เพิ่มเพื่อน</button></div></div></div>`;
 }
 
 // ─── Collapsing header ────────────────────────────────────────
@@ -909,7 +907,7 @@ app.addEventListener("click", e => {
   if (action==="clear-file") { view.pendingFile=null; render(); }
   if (action==="copy-id") {
     const code=currentUser()?.id||"";
-    navigator.clipboard?.writeText(code).then(()=>alert("คัดลอก ID แล้ว: "+code))||window.prompt("TaiTalk ID",code);
+    navigator.clipboard?.writeText(code).then(()=>alert("คัดลอก @username แล้ว: "+code))||window.prompt("TaiTalk Username",code);
   }
   if (action==="do-add-friend") {
     const otherId=t.dataset.user;
