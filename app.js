@@ -1,0 +1,1493 @@
+const IMPORTANT_KEYWORDS = [
+  "ด่วน",
+  "สำคัญ",
+  "ส่งงาน",
+  "deadline",
+  "ประชุม",
+  "สอบ",
+  "วันนี้",
+  "พรุ่งนี้",
+  "นัด",
+  "ต้องส่ง",
+  "final",
+  "project",
+  "assignment",
+];
+
+const AD_KEYWORDS = [
+  "โปรโมชั่น",
+  "ลดราคา",
+  "sale",
+  "discount",
+  "flash sale",
+  "ซื้อ 1 แถม 1",
+  "ฟรี",
+  "คูปอง",
+  "voucher",
+  "โค้ดส่วนลด",
+  "shop",
+  "shopping",
+  "สั่งซื้อ",
+  "สมัครวันนี้",
+  "รับสิทธิ์",
+  "แจกฟรี",
+  "คลิกเลย",
+];
+
+const DEFAULT_FOLDERS = ["Main", "Important", "Advertising", "Request", "Group", "Work", "Study", "Friends", "Family"];
+const STORAGE_KEY = "taitalk:v1:mobile";
+const app = document.querySelector("#app");
+
+let state = loadState();
+let sessionId = localStorage.getItem("taitalk:session");
+let view = {
+  authMode: "register",
+  screen: "home",
+  folder: "Main",
+  chatId: null,
+  detailTab: "people",
+  search: "",
+  peopleSearch: "",
+  newFolderName: "",
+  groupDraft: "",
+  groupMemberDraft: "",
+  groupPhotoDraft: "",
+  qrInput: "",
+  pendingFile: null,
+  manageMode: false,
+  selectedChatIds: [],
+  modalTitle: "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน",
+  modalBody: "ฟีเจอร์นี้จะแสดง popup เท่านั้นใน V1",
+};
+
+function defaultState() {
+  return {
+    users: [
+      { id: "TT-1002", username: "mali", password: "1234", avatar: "", blocked: [] },
+      { id: "TT-1003", username: "narin", password: "1234", avatar: "", blocked: [] },
+      { id: "TT-1004", username: "studyteam", password: "1234", avatar: "", blocked: [] },
+    ],
+    friendships: [],
+    customFolders: [],
+    appSettings: {
+      fontSize: "normal",
+      theme: "light",
+    },
+    folderSettings: Object.fromEntries(
+      DEFAULT_FOLDERS.map((folder) => [
+        folder,
+        {
+          notify: folder !== "Advertising",
+          bump: folder !== "Advertising",
+          badge: true,
+          highlight: true,
+        },
+      ]),
+    ),
+    chats: [],
+  };
+}
+
+function loadState() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (!saved) return defaultState();
+  try {
+    const parsed = JSON.parse(saved);
+    const base = defaultState();
+    const merged = { ...base, ...parsed };
+    merged.folderSettings = { ...base.folderSettings, ...(parsed.folderSettings || {}) };
+    merged.appSettings = { ...base.appSettings, ...(parsed.appSettings || {}) };
+    merged.customFolders = parsed.customFolders || [];
+    return merged;
+  } catch {
+    return defaultState();
+  }
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function makeId(prefix) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
+}
+
+function currentUser() {
+  return state.users.find((user) => user.id === sessionId) || null;
+}
+
+function byId(id) {
+  return state.users.find((user) => user.id === id);
+}
+
+function isBlocked(a, b) {
+  const userA = byId(a);
+  const userB = byId(b);
+  return Boolean(userA?.blocked?.includes(b) || userB?.blocked?.includes(a));
+}
+
+function areFriends(a, b) {
+  return state.friendships.some((pair) => pair.includes(a) && pair.includes(b));
+}
+
+function addFriend(a, b) {
+  if (!areFriends(a, b)) state.friendships.push([a, b]);
+}
+
+function folderNames() {
+  return unique([...DEFAULT_FOLDERS, ...(state.customFolders || [])]);
+}
+
+function defaultFolderSetting(folder) {
+  return {
+    notify: folder !== "Advertising",
+    bump: folder !== "Advertising",
+    badge: true,
+    highlight: true,
+  };
+}
+
+function ensureFolderSetting(folder) {
+  if (!state.folderSettings[folder]) state.folderSettings[folder] = defaultFolderSetting(folder);
+  return state.folderSettings[folder];
+}
+
+function classifyMessage(text) {
+  const normalized = text.toLowerCase();
+  if (AD_KEYWORDS.some((keyword) => normalized.includes(keyword.toLowerCase()))) return "advertising";
+  if (IMPORTANT_KEYWORDS.some((keyword) => normalized.includes(keyword.toLowerCase()))) return "important";
+  return "normal";
+}
+
+function chatName(chat) {
+  if (chat.type === "group") return chat.name;
+  const other = chat.members.find((id) => id !== sessionId);
+  return byId(other)?.username || "Unknown";
+}
+
+function chatAvatar(chat) {
+  if (chat.type === "group") return chat.photo;
+  const other = chat.members.find((id) => id !== sessionId);
+  return byId(other)?.avatar || "";
+}
+
+function initials(name) {
+  return (name || "T").slice(0, 2).toUpperCase();
+}
+
+function formatTime(value) {
+  return new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+}
+
+function visibleMessages(chat) {
+  return chat.messages.filter((message) => !message.hiddenFor?.includes(sessionId));
+}
+
+function latestMessage(chat) {
+  return [...visibleMessages(chat)].reverse().find(Boolean);
+}
+
+function categoryFolder(category) {
+  if (category === "advertising") return "Advertising";
+  if (category === "important") return "Important";
+  return "Main";
+}
+
+function friendCode(user) {
+  return `TAITALK:${user.id}:${user.username}`;
+}
+
+function userFromFriendCode(code) {
+  const cleaned = String(code || "").trim();
+  const parts = cleaned.split(":");
+  const id = parts.length >= 2 && parts[0].toUpperCase() === "TAITALK" ? parts[1] : cleaned;
+  return state.users.find((user) => user.id.toLowerCase() === id.toLowerCase() || friendCode(user).toLowerCase() === cleaned.toLowerCase());
+}
+
+function renderQr(user) {
+  const seed = friendCode(user);
+  let hash = 0;
+  for (let index = 0; index < seed.length; index++) hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+  const cells = Array.from({ length: 121 }, (_, index) => {
+    const row = Math.floor(index / 11);
+    const col = index % 11;
+    const finder =
+      (row < 3 && col < 3) ||
+      (row < 3 && col > 7) ||
+      (row > 7 && col < 3);
+    const on = finder || ((hash >> ((row + col) % 24)) + row * 7 + col * 11) % 3 === 0;
+    return `<span class="${on ? "on" : ""}"></span>`;
+  }).join("");
+  return `<div class="qr-card" aria-label="QR Code"><div class="qr-grid">${cells}</div><code>${escapeHtml(friendCode(user))}</code></div>`;
+}
+
+function ensureChatForUser(otherId) {
+  let chat = state.chats.find((item) => item.type === "direct" && item.members.includes(sessionId) && item.members.includes(otherId));
+  if (!chat) {
+    chat = {
+      id: makeId("chat"),
+      type: "direct",
+      members: [sessionId, otherId],
+      tags: areFriends(sessionId, otherId) ? ["Main"] : ["Request"],
+      unread: {},
+      importantUnread: {},
+      updatedAt: Date.now(),
+      messages: [],
+    };
+    state.chats.push(chat);
+  }
+  return chat;
+}
+
+function filteredChats() {
+  const user = currentUser();
+  if (!user) return [];
+  return state.chats
+    .filter((chat) => chat.members.includes(user.id))
+    .filter((chat) => !chat.hiddenFor?.includes(user.id))
+    .filter((chat) => !chat.members.some((member) => member !== user.id && isBlocked(user.id, member)))
+    .filter((chat) => chat.tags.includes(view.folder))
+    .filter((chat) => {
+      const q = view.search.trim().toLowerCase();
+      if (!q) return true;
+      const fileText = chat.messages.map((message) => message.file?.name || "").join(" ");
+      const messageText = chat.messages.map((message) => message.text).join(" ");
+      const members = chat.members.map((id) => `${byId(id)?.username || ""} ${id}`).join(" ");
+      return `${chatName(chat)} ${members} ${messageText} ${fileText}`.toLowerCase().includes(q);
+    })
+    .sort((a, b) => {
+      const folder = view.folder;
+      const pinnedDelta = Number(b.pinnedFor?.includes(user.id)) - Number(a.pinnedFor?.includes(user.id));
+      if (pinnedDelta) return pinnedDelta;
+      const setting = ensureFolderSetting(folder);
+      if (!setting?.bump) return a.id.localeCompare(b.id);
+      return b.updatedAt - a.updatedAt;
+    });
+}
+
+function folderCounts() {
+  const counts = Object.fromEntries(folderNames().map((folder) => [folder, { unread: 0, important: 0 }]));
+  for (const chat of state.chats) {
+    if (!chat.members.includes(sessionId)) continue;
+    if (chat.hiddenFor?.includes(sessionId)) continue;
+    for (const folder of chat.tags) {
+      if (!counts[folder]) counts[folder] = { unread: 0, important: 0 };
+      counts[folder].unread += chat.unread?.[sessionId] || 0;
+      counts[folder].important += chat.importantUnread?.[sessionId] || 0;
+    }
+  }
+  return counts;
+}
+
+function searchedUsers() {
+  const q = view.search.trim().toLowerCase();
+  if (!q) return [];
+  return state.users
+    .filter((user) => user.id !== sessionId && !isBlocked(sessionId, user.id))
+    .filter((user) => `${user.username} ${user.id}`.toLowerCase().includes(q));
+}
+
+function render() {
+  const user = currentUser();
+  if (!user) {
+    renderAuth();
+  } else {
+    renderApp(user);
+  }
+  requestAnimationFrame(() => {
+    if (window.lucide) window.lucide.createIcons();
+  });
+}
+
+function renderAuth() {
+  const isRegister = view.authMode === "register";
+  app.innerHTML = `
+    <section class="auth-shell">
+      <div class="auth-panel">
+        <div class="brand">
+          <div class="brand-mark">TT</div>
+          <div>
+            <h1>TaiTalk</h1>
+            <p>LINE style chat for friends, groups, and focused messages</p>
+          </div>
+        </div>
+        <div class="tabs">
+          <button class="${isRegister ? "active" : ""}" data-action="auth-tab" data-mode="register">สมัครสมาชิก</button>
+          <button class="${!isRegister ? "active" : ""}" data-action="auth-tab" data-mode="login">เข้าสู่ระบบ</button>
+        </div>
+        <form class="form" data-action="${isRegister ? "register" : "login"}">
+          <label class="field">Username<input name="username" autocomplete="username" required /></label>
+          <label class="field">Password<input name="password" type="password" autocomplete="${isRegister ? "new-password" : "current-password"}" required /></label>
+          ${
+            isRegister
+              ? `<label class="field">Confirm Password<input name="confirm" type="password" autocomplete="new-password" required /></label>`
+              : ""
+          }
+          <div class="error" id="auth-error"></div>
+          <button class="primary" type="submit"><i data-lucide="${isRegister ? "user-plus" : "log-in"}"></i>${isRegister ? "สมัครสมาชิก" : "เข้าสู่ระบบ"}</button>
+          <p class="hint">${isRegister ? "สมัครใหม่เพื่อเริ่มใช้งาน TaiTalk บนเครื่องนี้" : "ใช้บัญชีที่สมัครไว้บนเครื่องนี้"}</p>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function renderApp(user) {
+  if (!view.chatId) view.chatId = filteredChats()[0]?.id || state.chats.find((chat) => chat.members.includes(user.id))?.id || null;
+  const chats = filteredChats();
+  const selected = state.chats.find((chat) => chat.id === view.chatId && chat.members.includes(user.id)) || chats[0] || null;
+  if (selected) view.chatId = selected.id;
+  app.innerHTML = `
+    <section class="app-shell screen-${view.screen} theme-${state.appSettings.theme} font-${state.appSettings.fontSize}">
+      ${renderRail(user)}
+      ${renderHome()}
+      ${renderChatList(chats)}
+      ${selected ? renderChat(selected) : renderEmptyChat()}
+      ${renderDetail(selected)}
+      ${renderContentPage()}
+      ${renderBottomNav()}
+    </section>
+    ${renderModal()}
+  `;
+}
+
+function renderRail(user) {
+  const counts = folderCounts();
+  return `
+    <aside class="rail">
+      <div class="topbar">
+        <button class="profile profile-button" data-action="detail-tab" data-tab="profile">
+          <div class="avatar">${initials(user.username)}</div>
+          <div>
+            <strong>${escapeHtml(user.username)}</strong>
+            <div class="small">${user.id}</div>
+          </div>
+        </button>
+        <div class="top-actions">
+          <button class="icon-btn mobile-only" title="เพิ่มเพื่อน" data-action="detail-tab" data-tab="people"><i data-lucide="user-plus"></i></button>
+          <button class="icon-btn mobile-only" title="แจ้งเตือน" data-action="detail-tab" data-tab="notifications"><i data-lucide="bell"></i></button>
+          <button class="icon-btn mobile-only" title="จัดการแชท" data-action="toggle-manage"><i data-lucide="list-checks"></i></button>
+          <button class="icon-btn" title="ออกจากระบบ" data-action="logout"><i data-lucide="log-out"></i></button>
+        </div>
+      </div>
+      <div class="search-wrap">
+        <div class="global-search">
+          <i data-lucide="search"></i>
+          <input value="${escapeAttr(view.search)}" data-action="chat-search" placeholder="ค้นหาเพื่อน ID หรือข้อความในแชท" />
+          <button class="icon-btn" title="สแกน QR" data-action="detail-tab" data-tab="people"><i data-lucide="scan-line"></i></button>
+        </div>
+      </div>
+      <nav class="folder-list">
+        ${folderNames().map((folder) => {
+          const setting = ensureFolderSetting(folder);
+          const count = counts[folder];
+          const badge = setting?.badge && count.unread ? `<span class="badge">${count.unread}</span>` : "";
+          const important = count.important ? `<span class="badge important">สำคัญ +${count.important}</span>` : "";
+          return `
+            <button class="folder-btn ${view.folder === folder ? "active" : ""}" data-action="folder" data-folder="${folder}">
+              <i data-lucide="${folderIcon(folder)}"></i><span>${folder}</span>${important || badge}
+            </button>
+          `;
+        }).join("")}
+        <button class="folder-btn folder-add" data-action="detail-tab" data-tab="newFolder"><i data-lucide="folder-plus"></i><span>สร้าง</span></button>
+      </nav>
+    </aside>
+  `;
+}
+
+function renderBottomNav() {
+  const items = [
+    ["home", "", "home", "Home"],
+    ["list", "chat", "message-circle", "Chat"],
+    ["voom", "", "play-square", "VOOM"],
+    ["today", "", "newspaper", "Today"],
+    ["wallet", "", "wallet", "Wallet"],
+  ];
+  return `
+    <nav class="bottom-nav">
+      ${items.map(([screen, tab, icon, label]) => {
+        const active = view.screen === screen;
+        return `
+          <button class="${active ? "active" : ""}" data-action="bottom-nav" data-screen="${screen}" data-tab="${tab}">
+            <i data-lucide="${icon}"></i><span>${label}</span>
+          </button>
+        `;
+      }).join("")}
+    </nav>
+  `;
+}
+
+function renderHome() {
+  const actions = [
+    ["เพิ่มเพื่อน", "user-plus", "people"],
+    ["สร้างกลุ่ม", "users", "groups"],
+    ["OpenChat", "messages-square", "coming"],
+    ["สร้าง Folder", "folder-plus", "newFolder"],
+    ["ตั้งค่า Folder", "folder-cog", "folders"],
+    ["Settings", "settings", "settings"],
+    ["คลังไฟล์", "folder-open", "library"],
+    ["รูปทั้งหมด", "image", "library"],
+    ["Profile QR", "qr-code", "profile"],
+  ];
+  return `
+    <section class="home-page">
+      <div class="home-hero">
+        <p>TaiTalk Home</p>
+        <h2>ทุกอย่างของแชทอยู่ที่นี่</h2>
+      </div>
+      <div class="quick-grid">
+        ${actions.map(([label, icon, tab]) => `
+          <button data-action="${tab === "coming" ? "coming-soon" : "detail-tab"}" data-tab="${tab}" data-feature="${label}">
+            <i data-lucide="${icon}"></i><span>${label}</span>
+          </button>
+        `).join("")}
+      </div>
+      <div class="home-card">
+        <strong>LINE-style services</strong>
+        <p>Stickers, official accounts, games, coupons, mini apps, backup, storage, privacy center</p>
+      </div>
+    </section>
+  `;
+}
+
+function renderContentPage() {
+  if (view.screen === "voom") {
+    return `
+      <section class="content-page">
+        <div class="section-head"><strong>VOOM</strong></div>
+        <div class="feed">
+          ${["mali อัปโหลดรูปการบ้าน", "narin แชร์ไอเดีย project", "studyteam ลงโพสต์สรุปสอบ"].map((text) => `
+            <article class="feed-card">
+              <div class="feed-media"></div>
+              <strong>${escapeHtml(text)}</strong>
+              <p>โพสต์สั้น ๆ แบบ social feed สำหรับอัปเดตเรื่องราวของเพื่อน</p>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    `;
+  }
+  if (view.screen === "today") {
+    return `
+      <section class="content-page">
+        <div class="section-head"><strong>Today</strong></div>
+        <div class="feed">
+          ${["ข่าวเด่นวันนี้", "งานและการเรียน", "เทคโนโลยี", "ไลฟ์สไตล์"].map((text) => `
+            <article class="news-card">
+              <span>Today</span>
+              <strong>${escapeHtml(text)}</strong>
+              <p>พื้นที่รวมข่าวสารและคอนเทนต์ประจำวัน</p>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    `;
+  }
+  if (view.screen === "wallet") {
+    return `
+      <section class="content-page">
+        <div class="wallet-card">
+          <span>TaiPay Wallet</span>
+          <strong>฿ 0.00</strong>
+          <p>ยอดเงินพร้อมใช้</p>
+        </div>
+        <div class="quick-grid">
+          ${["เติมเงิน", "โอนเงิน", "จ่ายบิล", "คูปอง", "ประวัติ", "บัตร"].map((label) => `
+            <button data-action="coming-soon" data-feature="${label}"><i data-lucide="circle-dollar-sign"></i><span>${label}</span></button>
+          `).join("")}
+        </div>
+      </section>
+    `;
+  }
+  return "";
+}
+
+function renderChatList(chats) {
+  const users = searchedUsers();
+  return `
+    <aside class="chat-list">
+      <div class="section-head">
+        <strong>${view.manageMode ? "จัดการแชท" : view.folder}</strong>
+        <button class="icon-btn" title="จัดการแชท" data-action="toggle-manage"><i data-lucide="${view.manageMode ? "x" : "list-checks"}"></i></button>
+      </div>
+      ${view.manageMode ? renderBulkBar() : ""}
+      <div class="list-body">
+        ${users.length ? `<div class="search-users">${users.map(renderUserResult).join("")}</div>` : ""}
+        ${chats.length ? chats.map(renderChatRow).join("") : `<p class="empty">ยังไม่มีแชทในโฟลเดอร์นี้</p>`}
+      </div>
+    </aside>
+  `;
+}
+
+function renderBulkBar() {
+  return `
+    <div class="bulk-bar">
+      <span>${view.selectedChatIds.length} selected</span>
+      <button class="mini" data-action="bulk-chat" data-bulk="pin">ปักหมุด</button>
+      <button class="mini" data-action="bulk-chat" data-bulk="read">อ่านแล้ว</button>
+      <button class="mini" data-action="bulk-chat" data-bulk="mute">ปิดแจ้งเตือน</button>
+      <button class="mini" data-action="bulk-chat" data-bulk="hide">ซ่อน</button>
+      <button class="mini danger" data-action="bulk-chat" data-bulk="delete">ลบ</button>
+    </div>
+  `;
+}
+
+function renderUserResult(user) {
+  const friend = areFriends(sessionId, user.id);
+  return `
+    <button class="user-result" data-action="${friend ? "open-user-chat" : "add-friend"}" data-user="${user.id}">
+      ${avatarHtml(user.avatar, user.username)}
+      <span><strong>${escapeHtml(user.username)}</strong><small>${user.id}</small></span>
+      <i data-lucide="${friend ? "message-circle" : "user-plus"}"></i>
+    </button>
+  `;
+}
+
+function renderChatRow(chat) {
+  const latest = latestMessage(chat);
+  const unread = chat.unread?.[sessionId] || 0;
+  const important = chat.importantUnread?.[sessionId] || 0;
+  const setting = state.folderSettings[view.folder];
+  const highlight = setting?.highlight && unread ? "highlight" : "";
+  const labels = [
+    important ? `<span class="label important">Important</span>` : "",
+    chat.tags.includes("Advertising") ? `<span class="label ad">Advertising</span>` : "",
+    chat.type === "group" ? `<span class="label">Group</span>` : "",
+  ].join("");
+  return `
+    <button class="chat-row ${view.chatId === chat.id ? "active" : ""} ${highlight}" data-action="${view.manageMode ? "toggle-chat-select" : "select-chat"}" data-chat="${chat.id}">
+      ${view.manageMode ? `<span class="check-dot ${view.selectedChatIds.includes(chat.id) ? "checked" : ""}"><i data-lucide="check"></i></span>` : ""}
+      ${avatarHtml(chatAvatar(chat), chatName(chat))}
+      <span class="preview">
+        <strong>${escapeHtml(chatName(chat))}</strong>
+        <span class="small">${latest ? escapeHtml(latest.unsent ? "ยกเลิกข้อความแล้ว" : latest.file ? latest.file.name : latest.text) : "เริ่มแชท"}</span>
+        <span class="labels">${chat.pinnedFor?.includes(sessionId) ? `<span class="label">Pinned</span>` : ""}${chat.mutedFor?.includes(sessionId) ? `<span class="label">Muted</span>` : ""}${labels}</span>
+      </span>
+      <span>
+        <time>${latest ? formatTime(latest.createdAt) : ""}</time>
+        ${unread ? `<span class="badge">${unread}</span>` : ""}
+      </span>
+    </button>
+  `;
+}
+
+function renderChat(chat) {
+  const messages = visibleMessages(chat);
+  return `
+    <section class="chat">
+      <header class="chat-head">
+        <div class="chat-title">
+          <button class="icon-btn mobile-only" title="กลับ" data-action="back-list"><i data-lucide="chevron-left"></i></button>
+          ${avatarHtml(chatAvatar(chat), chatName(chat))}
+          <div>
+            <strong>${escapeHtml(chatName(chat))}</strong>
+            <div class="small">${chat.type === "group" ? `${chat.members.length} สมาชิก` : "User ID " + chat.members.find((id) => id !== sessionId)}</div>
+          </div>
+        </div>
+        <div class="chat-actions">
+          <button class="icon-btn" title="Voice Call" data-action="call"><i data-lucide="phone"></i></button>
+          <button class="icon-btn" title="Video Call" data-action="call"><i data-lucide="video"></i></button>
+          <button class="icon-btn" title="ข้อมูลแชท" data-action="detail-tab" data-tab="${chat.type === "group" ? "groups" : "people"}"><i data-lucide="panel-right"></i></button>
+        </div>
+      </header>
+      <div class="messages">
+        <div class="dayline">วันนี้</div>
+        ${messages.length ? messages.map((message) => renderMessage(chat, message)).join("") : `<p class="empty">ยังไม่มีข้อความ</p>`}
+      </div>
+      ${renderComposer(chat)}
+    </section>
+  `;
+}
+
+function renderMessage(chat, message) {
+  const mine = message.senderId === sessionId;
+  const sender = byId(message.senderId);
+  const ageHours = (Date.now() - message.createdAt) / 36e5;
+  const canUnsend = mine && !message.unsent && ageHours <= 24;
+  const categoryClass = message.category === "important" ? "important" : message.category === "advertising" ? "ad" : "";
+  return `
+    <article class="message ${mine ? "mine" : ""}">
+      ${chat.type === "group" && !mine ? `<span class="small">${escapeHtml(sender?.username || "Unknown")}</span>` : ""}
+      <div class="bubble ${categoryClass}">
+        ${message.unsent ? `<span class="small">ยกเลิกข้อความแล้ว</span>` : `${escapeHtml(message.text)}${message.file ? renderFile(message.file) : ""}`}
+      </div>
+      <div class="status">${statusText(message, mine)}</div>
+      ${
+        !message.unsent
+          ? `<div class="message-menu">
+              <button class="mini" data-action="delete-self" data-chat="${chat.id}" data-message="${message.id}">ลบฝั่งฉัน</button>
+              ${canUnsend ? `<button class="mini danger" data-action="unsend" data-chat="${chat.id}" data-message="${message.id}">ลบทั้งสองฝั่ง</button>` : ""}
+            </div>`
+          : ""
+      }
+    </article>
+  `;
+}
+
+function statusText(message, mine) {
+  if (message.readAt) return `${mine ? "อ่านแล้ว" : "อ่านแล้ว"} ${formatTime(message.readAt)}`;
+  if (message.deliveredAt) return `${mine ? "ถึงแล้ว" : "ถึงแล้ว"} ${formatTime(message.deliveredAt)}`;
+  return `ส่งแล้ว ${formatTime(message.createdAt)}`;
+}
+
+function renderFile(file) {
+  const image = file.type?.startsWith("image/") && file.url;
+  return `
+    <div class="file-chip">
+      ${image ? `<img src="${file.url}" alt="${escapeAttr(file.name)}" />` : `<i data-lucide="${fileIcon(file.name)}"></i>`}
+      <div>
+        <strong>${escapeHtml(file.name)}</strong>
+        <div class="small">${escapeHtml(file.type || "file")}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderComposer(chat) {
+  const inRequest = chat.tags.includes("Request");
+  return `
+    <form class="composer" data-action="send-message">
+      ${inRequest ? `<p class="hint">ตอบกลับในคำขอนี้เพื่อย้ายแชทเข้า Main และเริ่มคุยตามปกติ</p>` : ""}
+      <div class="pending-file ${view.pendingFile ? "show" : ""}">
+        <span>${view.pendingFile ? escapeHtml(view.pendingFile.name) : ""}</span>
+        <button class="mini" type="button" data-action="clear-file">ล้าง</button>
+      </div>
+      <div class="composer-row">
+        <label class="icon-btn" title="แนบไฟล์">
+          <i data-lucide="plus"></i>
+          <input type="file" data-action="file-input" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip" />
+        </label>
+        <button class="icon-btn" type="button" title="กล้อง" data-action="coming-soon" data-feature="กล้อง"><i data-lucide="camera"></i></button>
+        <input name="message" placeholder="พิมพ์ข้อความ" autocomplete="off" />
+        <button class="icon-btn" type="button" title="Emoji" data-action="coming-soon" data-feature="Emoji"><i data-lucide="smile"></i></button>
+        <button class="icon-btn" type="button" title="Voice" data-action="coming-soon" data-feature="Voice"><i data-lucide="mic"></i></button>
+        <button class="send-btn" type="submit" title="ส่ง"><i data-lucide="send"></i></button>
+      </div>
+    </form>
+  `;
+}
+
+function renderEmptyChat() {
+  return `
+    <section class="chat">
+      <div class="messages empty-state">
+        <p class="empty">ยังไม่มีแชท</p>
+        <button class="primary" data-action="detail-tab" data-tab="people"><i data-lucide="user-plus"></i>ค้นหาเพื่อน</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderDetail(selected) {
+  const showTabs = ["people", "groups", "profile"].includes(view.detailTab);
+  return `
+    <aside class="detail">
+      <div class="section-head">
+        <button class="icon-btn mobile-only" title="กลับ" data-action="back-list"><i data-lucide="chevron-left"></i></button>
+        <strong>${detailTitle()}</strong>
+      </div>
+      ${showTabs ? `
+        <div class="detail-tabs">
+          <div class="segmented">
+            <button class="${view.detailTab === "people" ? "active" : ""}" data-action="detail-tab" data-tab="people">เพื่อน</button>
+            <button class="${view.detailTab === "groups" ? "active" : ""}" data-action="detail-tab" data-tab="groups">กลุ่ม</button>
+            <button class="${view.detailTab === "profile" ? "active" : ""}" data-action="detail-tab" data-tab="profile">โปรไฟล์</button>
+          </div>
+        </div>
+      ` : ""}
+      <div class="panel">${detailPanel(selected)}</div>
+    </aside>
+  `;
+}
+
+function detailTitle() {
+  return {
+    people: "Friends",
+    groups: "Group",
+    notifications: "Notifications",
+    settings: "Settings",
+    profile: "Profile",
+    folders: "Folder Settings",
+    newFolder: "Create Folder",
+    library: "Media Library",
+  }[view.detailTab] || "จัดการ";
+}
+
+function detailPanel(selected) {
+  if (view.detailTab === "groups") return groupPanel(selected);
+  if (view.detailTab === "profile") return profilePanel();
+  if (view.detailTab === "notifications") return notificationsPanel();
+  if (view.detailTab === "settings") return settingsPanel();
+  if (view.detailTab === "folders") return folderSettingsPanel();
+  if (view.detailTab === "newFolder") return createFolderPanel();
+  if (view.detailTab === "library") return libraryPanel();
+  return peoplePanel(selected);
+}
+
+function peoplePanel(selected) {
+  const q = view.peopleSearch.trim().toLowerCase();
+  const user = currentUser();
+  const results = state.users.filter((item) => {
+    if (item.id === user.id) return false;
+    if (isBlocked(user.id, item.id)) return false;
+    if (!q) return true;
+    return item.username.toLowerCase().includes(q) || item.id.toLowerCase().includes(q);
+  });
+  const currentOther = selected?.type === "direct" ? selected.members.find((id) => id !== sessionId) : null;
+  return `
+    <div class="stack">
+      <div class="block">
+        <h3>โปรไฟล์ของฉัน</h3>
+        <div class="inline">
+          <input value="${escapeAttr(user.username)}" data-action="username-input" placeholder="Username ใหม่" />
+          <button class="ghost" data-action="save-username"><i data-lucide="save"></i></button>
+        </div>
+        <p class="hint">User ID ${user.id} เปลี่ยนไม่ได้</p>
+      </div>
+      <div class="block">
+        <h3>เพิ่มเพื่อนด้วย QR</h3>
+        <div class="qr-tools">
+          ${renderQr(user)}
+          <div class="stack">
+            <button class="ghost" data-action="copy-qr"><i data-lucide="copy"></i>คัดลอก QR Code</button>
+            <label class="field">สแกนหรือวางโค้ด QR
+              <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="TAITALK:TT-1002:mali" />
+            </label>
+            <button class="primary" data-action="add-by-qr"><i data-lucide="scan-line"></i>เพิ่มจาก QR</button>
+          </div>
+        </div>
+      </div>
+      ${
+        currentOther
+          ? `<div class="block">
+              <h3>${escapeHtml(byId(currentOther)?.username || "")}</h3>
+              <button class="ghost danger" data-action="block-user" data-user="${currentOther}"><i data-lucide="ban"></i>บล็อกผู้ใช้นี้</button>
+            </div>`
+          : ""
+      }
+      <div class="block">
+        <h3>ค้นหาและเพิ่มเพื่อน</h3>
+        ${results.map((person) => {
+          const friend = areFriends(user.id, person.id);
+          return `
+            <div class="result-row">
+              <div>
+                <strong>${escapeHtml(person.username)}</strong>
+                <div class="small">${person.id}</div>
+              </div>
+              <button class="ghost" data-action="${friend ? "open-user-chat" : "add-friend"}" data-user="${person.id}">
+                <i data-lucide="${friend ? "message-circle" : "user-plus"}"></i>${friend ? "แชท" : "เพิ่ม"}
+              </button>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function profilePanel() {
+  const user = currentUser();
+  return `
+    <div class="stack">
+      <div class="profile-cover">
+        <div class="avatar profile-avatar">${initials(user.username)}</div>
+        <h2>${escapeHtml(user.username)}</h2>
+        <p>${user.id}</p>
+      </div>
+      <div class="block">
+        <h3>Display Name</h3>
+        <div class="inline">
+          <input value="${escapeAttr(user.username)}" data-action="username-input" placeholder="Username ใหม่" />
+          <button class="ghost" data-action="save-username"><i data-lucide="save"></i></button>
+        </div>
+        <p class="hint">Status: ใช้งาน TaiTalk</p>
+      </div>
+      <div class="block">
+        <h3>QR Code</h3>
+        ${renderQr(user)}
+        <button class="primary full" data-action="copy-qr"><i data-lucide="share-2"></i>แชร์โปรไฟล์</button>
+      </div>
+    </div>
+  `;
+}
+
+function searchPanel() {
+  const q = view.search.trim().toLowerCase();
+  const allMessages = state.chats
+    .filter((chat) => chat.members.includes(sessionId))
+    .flatMap((chat) => visibleMessages(chat).map((message) => ({ chat, message })))
+    .filter(({ chat, message }) => {
+      if (!q) return true;
+      return `${chatName(chat)} ${message.text} ${message.file?.name || ""}`.toLowerCase().includes(q);
+    });
+  return `
+    <div class="stack">
+      <div class="block">
+        <h3>ค้นหาทั้งหมด</h3>
+        <input value="${escapeAttr(view.search)}" data-action="chat-search" placeholder="ข้อความ รูป ไฟล์ ผู้ใช้ หรือกลุ่ม" />
+      </div>
+      <div class="search-tabs">
+        <span>Messages</span><span>Photos</span><span>Files</span><span>Users</span><span>Groups</span>
+      </div>
+      <div class="block">
+        <h3>ผลการค้นหา</h3>
+        ${allMessages.length ? allMessages.map(({ chat, message }) => `
+          <button class="result-row result-button" data-action="select-chat" data-chat="${chat.id}">
+            <span>
+              <strong>${escapeHtml(chatName(chat))}</strong>
+              <span class="small">${escapeHtml(message.file?.name || message.text || "ไฟล์")}</span>
+            </span>
+            <i data-lucide="chevron-right"></i>
+          </button>
+        `).join("") : `<p class="empty">ยังไม่มีผลลัพธ์</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function notificationsPanel() {
+  const requests = state.chats.filter((chat) => chat.members.includes(sessionId) && chat.tags.includes("Request"));
+  const important = state.chats.filter((chat) => chat.members.includes(sessionId) && (chat.importantUnread?.[sessionId] || 0) > 0);
+  return `
+    <div class="stack">
+      ${requests.length ? requests.map((chat) => notificationCard(chat, "คำขอข้อความ", "มีคนส่งข้อความมาและยังไม่ใช่เพื่อน")) .join("") : ""}
+      ${important.length ? important.map((chat) => notificationCard(chat, "Important", "มีข้อความสำคัญรออ่าน")) .join("") : ""}
+      ${!requests.length && !important.length ? `<div class="block"><p class="empty">ยังไม่มีแจ้งเตือนใหม่</p></div>` : ""}
+    </div>
+  `;
+}
+
+function notificationCard(chat, title, text) {
+  return `
+    <button class="notification-card" data-action="select-chat" data-chat="${chat.id}">
+      ${avatarHtml(chatAvatar(chat), chatName(chat))}
+      <span>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(chatName(chat))}: ${escapeHtml(text)}</span>
+      </span>
+      <time>${formatTime(chat.updatedAt)}</time>
+    </button>
+  `;
+}
+
+function groupPanel(selected) {
+  const group = selected?.type === "group" ? selected : null;
+  const available = state.users.filter((user) => user.id !== sessionId && !group?.members.includes(user.id) && !isBlocked(sessionId, user.id));
+  return `
+    <div class="stack">
+      <div class="block">
+        <h3>สร้างกลุ่ม</h3>
+        <div class="inline">
+          <input value="${escapeAttr(view.groupDraft)}" data-action="group-draft" placeholder="ชื่อกลุ่ม" />
+          <button class="ghost" data-action="create-group"><i data-lucide="plus"></i></button>
+        </div>
+      </div>
+      ${
+        group
+          ? `<div class="block">
+              <h3>${escapeHtml(group.name)}</h3>
+              <label class="field">เปลี่ยนชื่อกลุ่ม<input value="${escapeAttr(group.name)}" data-action="group-name" /></label>
+              <label class="field">URL รูปกลุ่ม<input value="${escapeAttr(group.photo || "")}" data-action="group-photo" placeholder="https://..." /></label>
+              <button class="primary" data-action="save-group" data-chat="${group.id}"><i data-lucide="save"></i>บันทึกกลุ่ม</button>
+            </div>
+            <div class="block">
+              <h3>สมาชิก</h3>
+              ${group.members.map((memberId) => `
+                <div class="result-row">
+                  <span>${escapeHtml(byId(memberId)?.username || memberId)} <span class="small">${memberId}</span></span>
+                  ${memberId !== sessionId ? `<button class="mini danger" data-action="remove-member" data-chat="${group.id}" data-user="${memberId}">ลบ</button>` : ""}
+                </div>
+              `).join("")}
+              <label class="field">เพิ่มสมาชิก
+                <select data-action="group-member-draft">
+                  <option value="">เลือกผู้ใช้</option>
+                  ${available.map((user) => `<option value="${user.id}">${escapeHtml(user.username)} (${user.id})</option>`).join("")}
+                </select>
+              </label>
+              <button class="ghost" data-action="add-member" data-chat="${group.id}"><i data-lucide="user-plus"></i>เพิ่มสมาชิก</button>
+            </div>`
+          : `<div class="block"><p class="empty">เลือกกลุ่มเพื่อแก้ไขสมาชิก ชื่อ และรูปกลุ่ม</p></div>`
+      }
+    </div>
+  `;
+}
+
+function settingsPanel() {
+  return `
+    <div class="stack">
+      <div class="block">
+        <h3>Appearance</h3>
+        <label class="field">ขนาดตัวหนังสือ
+          <select data-action="font-size">
+            <option value="small" ${state.appSettings.fontSize === "small" ? "selected" : ""}>เล็ก</option>
+            <option value="normal" ${state.appSettings.fontSize === "normal" ? "selected" : ""}>ปกติ</option>
+            <option value="large" ${state.appSettings.fontSize === "large" ? "selected" : ""}>ใหญ่</option>
+          </select>
+        </label>
+        <label class="switch-row">
+          <span>ธีมมืดดำ</span>
+          <input type="checkbox" ${state.appSettings.theme === "dark" ? "checked" : ""} data-action="theme-toggle" />
+        </label>
+      </div>
+      <div class="block">
+        <h3>Chat</h3>
+        <button class="ghost full" data-action="coming-soon" data-feature="Wallpaper"><i data-lucide="image"></i>Wallpaper</button>
+        <button class="ghost full" data-action="coming-soon" data-feature="Backup"><i data-lucide="cloud"></i>Backup</button>
+      </div>
+    </div>
+  `;
+}
+
+function folderSettingsPanel() {
+  return `
+    <div class="stack">
+      ${folderNames().map((folder) => {
+        const setting = ensureFolderSetting(folder);
+        return `
+          <div class="block">
+            <h3>${escapeHtml(folder)}</h3>
+            ${settingToggle(folder, "notify", "แจ้งเตือน")}
+            ${settingToggle(folder, "bump", "ดันแชทขึ้นบนสุด")}
+            ${settingToggle(folder, "badge", "แสดง Badge จำนวนข้อความ")}
+            ${settingToggle(folder, "highlight", "Highlight ข้อความใหม่")}
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function createFolderPanel() {
+  return `
+    <div class="stack">
+      <div class="block">
+        <h3>สร้าง Folder ใหม่</h3>
+        <div class="inline">
+          <input value="${escapeAttr(view.newFolderName)}" data-action="new-folder-name" placeholder="เช่น Project, Club, Shopping" />
+          <button class="primary" data-action="create-folder"><i data-lucide="folder-plus"></i></button>
+        </div>
+        <p class="hint">Folder ที่สร้างจะไปอยู่ในแถบโฟลเดอร์บนหน้า Chat</p>
+      </div>
+      <div class="block">
+        <h3>Folder ของฉัน</h3>
+        ${folderNames().map((folder) => `
+          <div class="result-row">
+            <span>${escapeHtml(folder)}</span>
+            ${DEFAULT_FOLDERS.includes(folder) ? `<span class="label">Default</span>` : `<button class="mini danger" data-action="delete-folder" data-folder="${escapeAttr(folder)}">ลบ</button>`}
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function libraryPanel() {
+  const files = state.chats
+    .filter((chat) => chat.members.includes(sessionId))
+    .flatMap((chat) => visibleMessages(chat).filter((message) => message.file).map((message) => ({ chat, message })));
+  const photos = files.filter(({ message }) => message.file.type?.startsWith("image/"));
+  return `
+    <div class="stack">
+      <div class="media-summary">
+        <div><strong>${photos.length}</strong><span>Photos</span></div>
+        <div><strong>${files.length}</strong><span>Files</span></div>
+      </div>
+      <div class="block">
+        <h3>รูปทั้งหมด</h3>
+        <div class="photo-grid">
+          ${photos.length ? photos.map(({ message }) => `<img src="${message.file.url}" alt="${escapeAttr(message.file.name)}" />`).join("") : `<p class="empty">ยังไม่มีรูป</p>`}
+        </div>
+      </div>
+      <div class="block">
+        <h3>ไฟล์ทั้งหมด</h3>
+        ${files.length ? files.map(({ chat, message }) => `
+          <button class="result-row result-button" data-action="select-chat" data-chat="${chat.id}">
+            <span><strong>${escapeHtml(message.file.name)}</strong><span class="small">${escapeHtml(chatName(chat))}</span></span>
+            <i data-lucide="${fileIcon(message.file.name)}"></i>
+          </button>
+        `).join("") : `<p class="empty">ยังไม่มีไฟล์</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function settingToggle(folder, key, label) {
+  return `
+    <label class="switch-row">
+      <span>${label}</span>
+      <input type="checkbox" ${state.folderSettings[folder]?.[key] ? "checked" : ""} data-action="folder-setting" data-folder="${folder}" data-key="${key}" />
+    </label>
+  `;
+}
+
+function renderModal() {
+  return `
+    <div class="modal-backdrop" id="modal">
+      <div class="modal">
+        <h2>${escapeHtml(view.modalTitle)}</h2>
+        <p class="hint">${escapeHtml(view.modalBody)}</p>
+        <div class="modal-actions">
+          <button class="primary" data-action="close-modal">ตกลง</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function avatarHtml(src, name) {
+  return `<span class="avatar">${src ? `<img src="${escapeAttr(src)}" alt="${escapeAttr(name)}" />` : initials(name)}</span>`;
+}
+
+function folderIcon(folder) {
+  return {
+    Main: "message-circle",
+    Important: "star",
+    Advertising: "megaphone",
+    Request: "inbox",
+    Group: "users",
+    Work: "briefcase-business",
+    Study: "book-open",
+    Friends: "smile",
+    Family: "home",
+  }[folder] || "tag";
+}
+
+function fileIcon(name) {
+  const ext = name.split(".").pop()?.toLowerCase();
+  if (ext === "pdf") return "file-text";
+  if (["doc", "docx"].includes(ext)) return "file-type";
+  if (["xls", "xlsx"].includes(ext)) return "sheet";
+  if (ext === "zip") return "archive";
+  return "file";
+}
+
+function showAuthError(text) {
+  const error = document.querySelector("#auth-error");
+  if (!error) return;
+  error.textContent = text;
+  error.classList.add("show");
+}
+
+function handleAuth(form, mode) {
+  const data = new FormData(form);
+  const username = String(data.get("username") || "").trim();
+  const password = String(data.get("password") || "");
+  if (mode === "login") {
+    const user = state.users.find((item) => item.username === username && item.password === password);
+    if (!user) return showAuthError("Username หรือ Password ไม่ถูกต้อง");
+    sessionId = user.id;
+    view.screen = "home";
+    localStorage.setItem("taitalk:session", sessionId);
+    render();
+    return;
+  }
+  const confirm = String(data.get("confirm") || "");
+  if (password !== confirm) return showAuthError("Password และ Confirm Password ต้องตรงกัน");
+  if (state.users.some((item) => item.username.toLowerCase() === username.toLowerCase())) return showAuthError("Username นี้ถูกใช้แล้ว");
+  const user = { id: `TT-${Math.floor(1000 + Math.random() * 9000)}`, username, password, avatar: "", blocked: [] };
+  state.users.push(user);
+  saveState();
+  sessionId = user.id;
+  view.screen = "home";
+  localStorage.setItem("taitalk:session", sessionId);
+  render();
+}
+
+function applyBulkAction(type) {
+  if (!view.selectedChatIds.length) return;
+  for (const chat of state.chats.filter((item) => view.selectedChatIds.includes(item.id))) {
+    if (type === "pin") chat.pinnedFor = unique([...(chat.pinnedFor || []), sessionId]);
+    if (type === "mute") chat.mutedFor = unique([...(chat.mutedFor || []), sessionId]);
+    if (type === "hide") chat.hiddenFor = unique([...(chat.hiddenFor || []), sessionId]);
+    if (type === "read") {
+      chat.unread[sessionId] = 0;
+      chat.importantUnread[sessionId] = 0;
+      chat.messages.forEach((message) => {
+        if (message.senderId !== sessionId && !message.readAt) message.readAt = Date.now();
+      });
+    }
+  }
+  if (type === "delete") {
+    state.chats.forEach((chat) => {
+      if (view.selectedChatIds.includes(chat.id)) chat.hiddenFor = unique([...(chat.hiddenFor || []), sessionId]);
+    });
+  }
+  view.selectedChatIds = [];
+  view.manageMode = false;
+  saveState();
+  render();
+}
+
+function sendMessage(text, file) {
+  const chat = state.chats.find((item) => item.id === view.chatId);
+  if (!chat || (!text.trim() && !file)) return;
+  const recipients = chat.members.filter((member) => member !== sessionId);
+  if (recipients.some((member) => isBlocked(sessionId, member))) {
+    alert("ไม่สามารถส่งข้อความได้ เนื่องจากมีการบล็อกผู้ใช้");
+    return;
+  }
+  const category = classifyMessage(`${text} ${file?.name || ""}`);
+  const now = Date.now();
+  chat.messages.push({
+    id: makeId("msg"),
+    senderId: sessionId,
+    text: text.trim(),
+    file,
+    createdAt: now,
+    deliveredAt: now + 1000,
+    readAt: null,
+    hiddenFor: [],
+    unsent: false,
+    category,
+  });
+  chat.updatedAt = now;
+  if (chat.tags.includes("Request")) {
+    chat.tags = ["Main"];
+    recipients.forEach((member) => addFriend(sessionId, member));
+  }
+  if (category === "advertising") chat.tags = unique(["Advertising", ...chat.tags.filter((tag) => tag !== "Important")]);
+  if (category === "important" && !chat.tags.includes("Advertising")) chat.tags = unique(["Important", ...chat.tags]);
+  if (chat.type === "group") chat.tags = unique(["Group", ...chat.tags]);
+  for (const member of recipients) {
+    chat.unread[member] = (chat.unread[member] || 0) + 1;
+    if (category === "important" && !chat.tags.includes("Advertising")) chat.importantUnread[member] = (chat.importantUnread[member] || 0) + 1;
+  }
+  view.pendingFile = null;
+  saveState();
+  render();
+}
+
+function unique(items) {
+  return [...new Set(items)];
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value);
+}
+
+app.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const action = event.target.dataset.action;
+  if (action === "login" || action === "register") handleAuth(event.target, action);
+  if (action === "send-message") {
+    const input = event.target.elements.message;
+    sendMessage(input.value, view.pendingFile);
+  }
+});
+
+app.addEventListener("input", (event) => {
+  const action = event.target.dataset.action;
+  if (action === "chat-search") {
+    view.search = event.target.value;
+    view.screen = "list";
+    view.manageMode = false;
+    render();
+  }
+  if (action === "people-search") {
+    view.peopleSearch = event.target.value;
+    view.detailTab = "people";
+    render();
+  }
+  if (action === "new-folder-name") view.newFolderName = event.target.value;
+  if (action === "group-draft") view.groupDraft = event.target.value;
+  if (action === "group-member-draft") view.groupMemberDraft = event.target.value;
+  if (action === "qr-input") view.qrInput = event.target.value;
+});
+
+app.addEventListener("change", (event) => {
+  const action = event.target.dataset.action;
+  if (action === "file-input") {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const allowed = ["image/", "application/pdf", "application/zip", "application/x-zip-compressed"];
+    const extOk = /\.(docx?|xlsx?|zip|pdf)$/i.test(file.name);
+    if (!allowed.some((type) => file.type.startsWith(type)) && !extOk) {
+      alert("รองรับเฉพาะรูปภาพ, PDF, Word, Excel และ ZIP");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      view.pendingFile = { name: file.name, type: file.type || "file", url: reader.result };
+      render();
+    };
+    reader.readAsDataURL(file);
+  }
+  if (action === "folder-setting") {
+    const folder = event.target.dataset.folder;
+    const key = event.target.dataset.key;
+    ensureFolderSetting(folder)[key] = event.target.checked;
+    saveState();
+    render();
+  }
+  if (action === "font-size") {
+    state.appSettings.fontSize = event.target.value;
+    saveState();
+    render();
+  }
+  if (action === "theme-toggle") {
+    state.appSettings.theme = event.target.checked ? "dark" : "light";
+    saveState();
+    render();
+  }
+});
+
+app.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-action]");
+  if (!target) return;
+  const action = target.dataset.action;
+
+  if (action === "auth-tab") {
+    view.authMode = target.dataset.mode;
+    render();
+  }
+  if (action === "logout") {
+    sessionId = null;
+    localStorage.removeItem("taitalk:session");
+    view.screen = "home";
+    view.authMode = "register";
+    render();
+  }
+  if (action === "folder") {
+    view.folder = target.dataset.folder;
+    view.chatId = null;
+    view.screen = "list";
+    view.manageMode = false;
+    render();
+  }
+  if (action === "bottom-nav") {
+    view.screen = target.dataset.screen;
+    if (target.dataset.tab) view.detailTab = target.dataset.tab;
+    view.manageMode = false;
+    render();
+  }
+  if (action === "toggle-manage") {
+    view.screen = "list";
+    view.manageMode = !view.manageMode;
+    view.selectedChatIds = [];
+    render();
+  }
+  if (action === "toggle-chat-select") {
+    const chatId = target.dataset.chat;
+    view.selectedChatIds = view.selectedChatIds.includes(chatId)
+      ? view.selectedChatIds.filter((id) => id !== chatId)
+      : [...view.selectedChatIds, chatId];
+    render();
+  }
+  if (action === "bulk-chat") {
+    applyBulkAction(target.dataset.bulk);
+  }
+  if (action === "select-chat") {
+    view.chatId = target.dataset.chat;
+    view.screen = "chat";
+    const chat = state.chats.find((item) => item.id === view.chatId);
+    if (chat) {
+      chat.unread[sessionId] = 0;
+      chat.importantUnread[sessionId] = 0;
+      chat.messages.forEach((message) => {
+        if (message.senderId !== sessionId && !message.readAt) message.readAt = Date.now();
+      });
+      saveState();
+    }
+    render();
+  }
+  if (action === "detail-tab") {
+    view.detailTab = target.dataset.tab;
+    view.screen = "tools";
+    view.manageMode = false;
+    render();
+  }
+  if (action === "back-list") {
+    view.screen = "list";
+    render();
+  }
+  if (action === "call") {
+    view.modalTitle = "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน";
+    view.modalBody = "Voice Call และ Video Call จะแสดง popup เท่านั้นใน V1";
+    render();
+    document.querySelector("#modal")?.classList.add("show");
+  }
+  if (action === "coming-soon") {
+    view.modalTitle = "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน";
+    view.modalBody = `${target.dataset.feature || "ฟีเจอร์นี้"} จะเปิดใช้งานในเวอร์ชันถัดไป`;
+    render();
+    document.querySelector("#modal")?.classList.add("show");
+  }
+  if (action === "close-modal") {
+    document.querySelector("#modal")?.classList.remove("show");
+  }
+  if (action === "clear-file") {
+    view.pendingFile = null;
+    render();
+  }
+  if (action === "delete-self") {
+    const chat = state.chats.find((item) => item.id === target.dataset.chat);
+    const message = chat?.messages.find((item) => item.id === target.dataset.message);
+    if (message) {
+      message.hiddenFor = unique([...(message.hiddenFor || []), sessionId]);
+      saveState();
+      render();
+    }
+  }
+  if (action === "unsend") {
+    const chat = state.chats.find((item) => item.id === target.dataset.chat);
+    const message = chat?.messages.find((item) => item.id === target.dataset.message);
+    if (message && (Date.now() - message.createdAt) / 36e5 <= 24) {
+      message.unsent = true;
+      message.text = "";
+      message.file = null;
+      saveState();
+      render();
+    }
+  }
+  if (action === "add-friend" || action === "open-user-chat") {
+    const otherId = target.dataset.user;
+    if (action === "add-friend") addFriend(sessionId, otherId);
+    const chat = ensureChatForUser(otherId);
+    view.folder = chat.tags.includes("Request") ? "Request" : "Main";
+    view.chatId = chat.id;
+    view.screen = "chat";
+    view.manageMode = false;
+    saveState();
+    render();
+  }
+  if (action === "create-folder") {
+    const name = view.newFolderName.trim();
+    if (!name) return;
+    if (folderNames().some((folder) => folder.toLowerCase() === name.toLowerCase())) {
+      alert("มี Folder นี้แล้ว");
+      return;
+    }
+    state.customFolders = unique([...(state.customFolders || []), name]);
+    state.folderSettings[name] = defaultFolderSetting(name);
+    view.newFolderName = "";
+    view.folder = name;
+    saveState();
+    render();
+  }
+  if (action === "delete-folder") {
+    const folder = target.dataset.folder;
+    state.customFolders = (state.customFolders || []).filter((item) => item !== folder);
+    delete state.folderSettings[folder];
+    state.chats.forEach((chat) => {
+      chat.tags = chat.tags.filter((tag) => tag !== folder);
+      if (!chat.tags.length) chat.tags = ["Main"];
+    });
+    if (view.folder === folder) view.folder = "Main";
+    saveState();
+    render();
+  }
+  if (action === "add-by-qr") {
+    const other = userFromFriendCode(view.qrInput);
+    if (!other) {
+      alert("ไม่พบผู้ใช้จาก QR Code นี้");
+      return;
+    }
+    if (other.id === sessionId) {
+      alert("นี่คือ QR Code ของคุณเอง");
+      return;
+    }
+    if (isBlocked(sessionId, other.id)) {
+      alert("ไม่สามารถเพิ่มผู้ใช้นี้ได้");
+      return;
+    }
+    addFriend(sessionId, other.id);
+    const chat = ensureChatForUser(other.id);
+    view.qrInput = "";
+    view.folder = "Main";
+    view.chatId = chat.id;
+    view.screen = "chat";
+    saveState();
+    render();
+  }
+  if (action === "copy-qr") {
+    const code = friendCode(currentUser());
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(code).then(() => alert("คัดลอก QR Code แล้ว"));
+    } else {
+      window.prompt("คัดลอก QR Code", code);
+    }
+  }
+  if (action === "block-user") {
+    const user = currentUser();
+    user.blocked = unique([...(user.blocked || []), target.dataset.user]);
+    state.chats = state.chats.filter((chat) => !(chat.type === "direct" && chat.members.includes(sessionId) && chat.members.includes(target.dataset.user)));
+    view.chatId = null;
+    saveState();
+    render();
+  }
+  if (action === "save-username") {
+    const input = document.querySelector("[data-action='username-input']");
+    const next = input?.value.trim();
+    if (!next) return;
+    if (state.users.some((user) => user.id !== sessionId && user.username.toLowerCase() === next.toLowerCase())) {
+      alert("Username นี้ถูกใช้แล้ว");
+      return;
+    }
+    currentUser().username = next;
+    saveState();
+    render();
+  }
+  if (action === "create-group") {
+    const name = view.groupDraft.trim();
+    if (!name) return;
+    const chat = {
+      id: makeId("group"),
+      type: "group",
+      name,
+      photo: "",
+      members: [sessionId],
+      tags: ["Group"],
+      unread: {},
+      importantUnread: {},
+      updatedAt: Date.now(),
+      messages: [],
+    };
+    state.chats.push(chat);
+    view.groupDraft = "";
+    view.folder = "Group";
+    view.chatId = chat.id;
+    view.screen = "chat";
+    saveState();
+    render();
+  }
+  if (action === "save-group") {
+    const chat = state.chats.find((item) => item.id === target.dataset.chat);
+    const nameInput = document.querySelector("[data-action='group-name']");
+    const photoInput = document.querySelector("[data-action='group-photo']");
+    if (chat) {
+      chat.name = nameInput?.value.trim() || chat.name;
+      chat.photo = photoInput?.value.trim() || "";
+      saveState();
+      render();
+    }
+  }
+  if (action === "add-member") {
+    const chat = state.chats.find((item) => item.id === target.dataset.chat);
+    if (chat && view.groupMemberDraft) {
+      chat.members = unique([...chat.members, view.groupMemberDraft]);
+      view.groupMemberDraft = "";
+      saveState();
+      render();
+    }
+  }
+  if (action === "remove-member") {
+    const chat = state.chats.find((item) => item.id === target.dataset.chat);
+    if (chat) {
+      chat.members = chat.members.filter((id) => id !== target.dataset.user);
+      saveState();
+      render();
+    }
+  }
+});
+
+render();
