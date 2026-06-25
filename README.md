@@ -6,6 +6,7 @@ TaiTalk V1 is a local-first LINE-style chat prototype that implements the final 
 - Immutable User ID and editable Username
 - Friend search by Username or User ID
 - Friend add by TaiTalk QR Code
+- Real QR image generation and camera QR scanning with manual code fallback
 - Custom folder creation and separate folder notification settings
 - Mobile Home hub with LINE-style service shortcuts
 - Bulk chat management for pin, mark read, mute, hide, and delete
@@ -13,6 +14,7 @@ TaiTalk V1 is a local-first LINE-style chat prototype that implements the final 
 - Media library for all shared photos and files
 - VOOM, Today, and Wallet prototype pages
 - Appearance settings for font size and dark theme
+- Language setting for Thai or English
 - Message Requests for non-friends, promoted to Main after reply
 - Group chat creation, member management, group name/photo editing
 - File sharing for images, PDF, Word, Excel, and ZIP with preview/name before sending

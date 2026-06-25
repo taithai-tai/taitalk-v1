@@ -58,7 +58,12 @@ let view = {
   selectedChatIds: [],
   modalTitle: "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน",
   modalBody: "ฟีเจอร์นี้จะแสดง popup เท่านั้นใน V1",
+  scannerOpen: false,
+  scannerStatus: "กำลังเตรียมกล้อง...",
 };
+
+let qrStream = null;
+let qrScanTimer = null;
 
 function defaultState() {
   return {
@@ -72,6 +77,7 @@ function defaultState() {
     appSettings: {
       fontSize: "normal",
       theme: "light",
+      language: "th",
     },
     folderSettings: Object.fromEntries(
       DEFAULT_FOLDERS.map((folder) => [
@@ -106,6 +112,73 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function afterRender() {
+  if (window.lucide) window.lucide.createIcons();
+  setupCollapsingHeader();
+  if (view.scannerOpen) startQrScanner();
+}
+
+function setupCollapsingHeader() {
+  const shell = document.querySelector(".app-shell");
+  if (!shell) return;
+  const scrollers = document.querySelectorAll(".home-page, .content-page, .list-body, .panel, .messages");
+  scrollers.forEach((scroller) => {
+    scroller.addEventListener(
+      "scroll",
+      () => {
+        shell.classList.toggle("header-compact", scroller.scrollTop > 24);
+      },
+      { passive: true },
+    );
+  });
+}
+
+async function startQrScanner() {
+  const video = document.querySelector("#qr-video");
+  if (!video || qrStream) return;
+  if (!("BarcodeDetector" in window)) {
+    view.scannerStatus = "เบราว์เซอร์นี้ยังไม่รองรับการสแกน QR ด้วยกล้อง กรุณาวางโค้ด QR แทน";
+    const hint = document.querySelector("#qr-scanner .hint");
+    if (hint) hint.textContent = view.scannerStatus;
+    return;
+  }
+  try {
+    qrStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    video.srcObject = qrStream;
+    await video.play();
+    view.scannerStatus = "เล็งกล้องไปที่ QR Code ของเพื่อน";
+    const detector = new BarcodeDetector({ formats: ["qr_code"] });
+    const scan = async () => {
+      if (!view.scannerOpen || !qrStream) return;
+      try {
+        const codes = await detector.detect(video);
+        if (codes.length && codes[0].rawValue) {
+          view.qrInput = codes[0].rawValue;
+          addFriendFromCode(codes[0].rawValue);
+          return;
+        }
+      } catch {
+        view.scannerStatus = "กำลังสแกน...";
+      }
+      qrScanTimer = window.setTimeout(scan, 350);
+    };
+    scan();
+  } catch {
+    view.scannerStatus = "เปิดกล้องไม่ได้ กรุณาอนุญาตกล้องหรือวางโค้ด QR แทน";
+    const hint = document.querySelector("#qr-scanner .hint");
+    if (hint) hint.textContent = view.scannerStatus;
+  }
+}
+
+function stopQrScanner() {
+  if (qrScanTimer) window.clearTimeout(qrScanTimer);
+  qrScanTimer = null;
+  if (qrStream) {
+    qrStream.getTracks().forEach((track) => track.stop());
+    qrStream = null;
+  }
 }
 
 function makeId(prefix) {
@@ -179,6 +252,10 @@ function formatTime(value) {
   return new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 }
 
+function ui(th, en) {
+  return state.appSettings.language === "en" ? en : th;
+}
+
 function visibleMessages(chat) {
   return chat.messages.filter((message) => !message.hiddenFor?.includes(sessionId));
 }
@@ -205,20 +282,41 @@ function userFromFriendCode(code) {
 }
 
 function renderQr(user) {
-  const seed = friendCode(user);
-  let hash = 0;
-  for (let index = 0; index < seed.length; index++) hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
-  const cells = Array.from({ length: 121 }, (_, index) => {
-    const row = Math.floor(index / 11);
-    const col = index % 11;
-    const finder =
-      (row < 3 && col < 3) ||
-      (row < 3 && col > 7) ||
-      (row > 7 && col < 3);
-    const on = finder || ((hash >> ((row + col) % 24)) + row * 7 + col * 11) % 3 === 0;
-    return `<span class="${on ? "on" : ""}"></span>`;
-  }).join("");
-  return `<div class="qr-card" aria-label="QR Code"><div class="qr-grid">${cells}</div><code>${escapeHtml(friendCode(user))}</code></div>`;
+  const code = friendCode(user);
+  const src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=12&data=${encodeURIComponent(code)}`;
+  return `
+    <div class="qr-card" aria-label="QR Code">
+      <img class="qr-image" src="${src}" alt="${escapeAttr(code)}" />
+      <code>${escapeHtml(code)}</code>
+    </div>
+  `;
+}
+
+function addFriendFromCode(code) {
+  const other = userFromFriendCode(code);
+  if (!other) {
+    alert("ไม่พบผู้ใช้จาก QR Code นี้");
+    return false;
+  }
+  if (other.id === sessionId) {
+    alert("นี่คือ QR Code ของคุณเอง");
+    return false;
+  }
+  if (isBlocked(sessionId, other.id)) {
+    alert("ไม่สามารถเพิ่มผู้ใช้นี้ได้");
+    return false;
+  }
+  addFriend(sessionId, other.id);
+  const chat = ensureChatForUser(other.id);
+  view.qrInput = "";
+  view.folder = "Main";
+  view.chatId = chat.id;
+  view.screen = "chat";
+  view.scannerOpen = false;
+  stopQrScanner();
+  saveState();
+  render();
+  return true;
 }
 
 function ensureChatForUser(otherId) {
@@ -294,9 +392,7 @@ function render() {
   } else {
     renderApp(user);
   }
-  requestAnimationFrame(() => {
-    if (window.lucide) window.lucide.createIcons();
-  });
+  requestAnimationFrame(afterRender);
 }
 
 function renderAuth() {
@@ -348,6 +444,7 @@ function renderApp(user) {
       ${renderBottomNav()}
     </section>
     ${renderModal()}
+    ${renderScanner()}
   `;
 }
 
@@ -373,8 +470,8 @@ function renderRail(user) {
       <div class="search-wrap">
         <div class="global-search">
           <i data-lucide="search"></i>
-          <input value="${escapeAttr(view.search)}" data-action="chat-search" placeholder="ค้นหาเพื่อน ID หรือข้อความในแชท" />
-          <button class="icon-btn" title="สแกน QR" data-action="detail-tab" data-tab="people"><i data-lucide="scan-line"></i></button>
+          <input value="${escapeAttr(view.search)}" data-action="chat-search" placeholder="${ui("ค้นหาเพื่อน ID หรือข้อความในแชท", "Search users, IDs, or chat messages")}" />
+          <button class="icon-btn" title="สแกน QR" data-action="open-scanner"><i data-lucide="scan-line"></i></button>
         </div>
       </div>
       <nav class="folder-list">
@@ -397,8 +494,8 @@ function renderRail(user) {
 
 function renderBottomNav() {
   const items = [
-    ["home", "", "home", "Home"],
-    ["list", "chat", "message-circle", "Chat"],
+    ["home", "", "home", ui("หน้าแรก", "Home")],
+    ["list", "chat", "message-circle", ui("แชท", "Chat")],
     ["voom", "", "play-square", "VOOM"],
     ["today", "", "newspaper", "Today"],
     ["wallet", "", "wallet", "Wallet"],
@@ -750,6 +847,7 @@ function peoplePanel(selected) {
           ${renderQr(user)}
           <div class="stack">
             <button class="ghost" data-action="copy-qr"><i data-lucide="copy"></i>คัดลอก QR Code</button>
+            <button class="ghost" data-action="open-scanner"><i data-lucide="camera"></i>เปิดกล้องสแกน</button>
             <label class="field">สแกนหรือวางโค้ด QR
               <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="TAITALK:TT-1002:mali" />
             </label>
@@ -917,16 +1015,22 @@ function settingsPanel() {
   return `
     <div class="stack">
       <div class="block">
-        <h3>Appearance</h3>
-        <label class="field">ขนาดตัวหนังสือ
+        <h3>${ui("การแสดงผล", "Appearance")}</h3>
+        <label class="field">${ui("ภาษา", "Language")}
+          <select data-action="language">
+            <option value="th" ${state.appSettings.language === "th" ? "selected" : ""}>ไทย</option>
+            <option value="en" ${state.appSettings.language === "en" ? "selected" : ""}>English</option>
+          </select>
+        </label>
+        <label class="field">${ui("ขนาดตัวหนังสือ", "Font size")}
           <select data-action="font-size">
-            <option value="small" ${state.appSettings.fontSize === "small" ? "selected" : ""}>เล็ก</option>
-            <option value="normal" ${state.appSettings.fontSize === "normal" ? "selected" : ""}>ปกติ</option>
-            <option value="large" ${state.appSettings.fontSize === "large" ? "selected" : ""}>ใหญ่</option>
+            <option value="small" ${state.appSettings.fontSize === "small" ? "selected" : ""}>${ui("เล็ก", "Small")}</option>
+            <option value="normal" ${state.appSettings.fontSize === "normal" ? "selected" : ""}>${ui("ปกติ", "Normal")}</option>
+            <option value="large" ${state.appSettings.fontSize === "large" ? "selected" : ""}>${ui("ใหญ่", "Large")}</option>
           </select>
         </label>
         <label class="switch-row">
-          <span>ธีมมืดดำ</span>
+          <span>${ui("ธีมมืดดำ", "Dark mode")}</span>
           <input type="checkbox" ${state.appSettings.theme === "dark" ? "checked" : ""} data-action="theme-toggle" />
         </label>
       </div>
@@ -1029,6 +1133,28 @@ function renderModal() {
         <p class="hint">${escapeHtml(view.modalBody)}</p>
         <div class="modal-actions">
           <button class="primary" data-action="close-modal">ตกลง</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderScanner() {
+  return `
+    <div class="modal-backdrop ${view.scannerOpen ? "show" : ""}" id="qr-scanner">
+      <div class="modal scanner-modal">
+        <h2>สแกน QR Code</h2>
+        <div class="scanner-frame">
+          <video id="qr-video" playsinline muted></video>
+          <div class="scan-corners"></div>
+        </div>
+        <p class="hint">${escapeHtml(view.scannerStatus)}</p>
+        <label class="field">หรือวางโค้ด QR
+          <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="TAITALK:TT-1002:mali" />
+        </label>
+        <div class="modal-actions">
+          <button class="ghost" data-action="close-scanner">ปิด</button>
+          <button class="primary" data-action="add-by-qr">เพิ่มจาก QR</button>
         </div>
       </div>
     </div>
@@ -1234,6 +1360,11 @@ app.addEventListener("change", (event) => {
     saveState();
     render();
   }
+  if (action === "language") {
+    state.appSettings.language = event.target.value;
+    saveState();
+    render();
+  }
   if (action === "theme-toggle") {
     state.appSettings.theme = event.target.checked ? "dark" : "light";
     saveState();
@@ -1325,6 +1456,16 @@ app.addEventListener("click", (event) => {
   if (action === "close-modal") {
     document.querySelector("#modal")?.classList.remove("show");
   }
+  if (action === "open-scanner") {
+    view.scannerOpen = true;
+    view.scannerStatus = "กำลังเตรียมกล้อง...";
+    render();
+  }
+  if (action === "close-scanner") {
+    view.scannerOpen = false;
+    stopQrScanner();
+    render();
+  }
   if (action === "clear-file") {
     view.pendingFile = null;
     render();
@@ -1387,27 +1528,7 @@ app.addEventListener("click", (event) => {
     render();
   }
   if (action === "add-by-qr") {
-    const other = userFromFriendCode(view.qrInput);
-    if (!other) {
-      alert("ไม่พบผู้ใช้จาก QR Code นี้");
-      return;
-    }
-    if (other.id === sessionId) {
-      alert("นี่คือ QR Code ของคุณเอง");
-      return;
-    }
-    if (isBlocked(sessionId, other.id)) {
-      alert("ไม่สามารถเพิ่มผู้ใช้นี้ได้");
-      return;
-    }
-    addFriend(sessionId, other.id);
-    const chat = ensureChatForUser(other.id);
-    view.qrInput = "";
-    view.folder = "Main";
-    view.chatId = chat.id;
-    view.screen = "chat";
-    saveState();
-    render();
+    addFriendFromCode(view.qrInput);
   }
   if (action === "copy-qr") {
     const code = friendCode(currentUser());

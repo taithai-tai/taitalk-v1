@@ -191,7 +191,7 @@ select:focus {
   min-height: 38px;
   padding: 9px 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 999px;
   color: var(--ink);
   background: var(--white);
 }
@@ -231,10 +231,36 @@ select:focus {
 
 .theme-dark {
   --ink: #edf4ef;
-  --muted: #a8b5ad;
-  --line: #27332c;
-  --soft: #101612;
-  --white: #151d18;
+  --muted: #9fb0a6;
+  --line: #1f3428;
+  --soft: #050806;
+  --white: #0b120e;
+  --green: #19d873;
+  --green-dark: #10af5b;
+  --shadow: 0 18px 45px rgba(0, 0, 0, 0.35);
+}
+
+.theme-dark .chat,
+.theme-dark .home-page,
+.theme-dark .content-page,
+.theme-dark .bulk-bar {
+  background: var(--soft);
+}
+
+.theme-dark .folder-btn:hover,
+.theme-dark .person-row:hover,
+.theme-dark .chat-row:hover,
+.theme-dark .folder-btn.active,
+.theme-dark .chat-row.active,
+.theme-dark .bottom-nav button.active {
+  background: #102519;
+}
+
+.theme-dark .label,
+.theme-dark .global-search,
+.theme-dark .qr-card,
+.theme-dark .file-chip {
+  background: #101a13;
 }
 
 .font-small {
@@ -250,7 +276,7 @@ select:focus {
 .detail {
   min-width: 0;
   min-height: 0;
-  background: #fbfdfc;
+  background: var(--white);
 }
 
 .rail {
@@ -310,10 +336,35 @@ select:focus {
   gap: 10px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
+  transition: padding 160ms ease;
 }
 
 .topbar {
   padding-top: max(14px, env(safe-area-inset-top));
+}
+
+.header-compact .topbar {
+  padding-top: max(8px, env(safe-area-inset-top));
+  padding-bottom: 8px;
+}
+
+.header-compact .search-wrap {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.header-compact .folder-list {
+  padding-top: 5px;
+  padding-bottom: 7px;
+}
+
+.header-compact .avatar {
+  width: 32px;
+  height: 32px;
+}
+
+.header-compact .profile .small {
+  display: none;
 }
 
 .profile {
@@ -344,7 +395,7 @@ select:focus {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 8px;
+  border-radius: 999px;
   color: var(--white);
   background: var(--green);
   font-weight: 800;
@@ -408,6 +459,7 @@ select:focus {
   width: auto;
   flex: 0 0 auto;
   border: 1px solid var(--line);
+  border-radius: 999px;
   background: var(--white);
 }
 
@@ -989,6 +1041,13 @@ select:focus {
   background: #f9fbfa;
 }
 
+.qr-image {
+  width: 220px;
+  height: 220px;
+  border-radius: 8px;
+  background: #fff;
+}
+
 .qr-card code {
   width: 100%;
   padding: 8px;
@@ -1010,6 +1069,32 @@ select:focus {
   border-radius: 8px;
   background: var(--white);
   box-shadow: 0 6px 20px rgba(22, 32, 24, 0.1);
+}
+
+.scanner-modal {
+  width: min(390px, 100%);
+}
+
+.scanner-frame {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #020403;
+}
+
+.scanner-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scan-corners {
+  position: absolute;
+  inset: 12%;
+  border: 2px solid rgba(25, 216, 115, 0.95);
+  border-radius: 8px;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.28);
 }
 
 .qr-grid span {
