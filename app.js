@@ -48,6 +48,8 @@ let view = {
   detailTab: "people",
   search: "",
   peopleSearch: "",
+  addFriendQuery: "",
+  addFriendResult: null, // null | "notfound" | user object
   newFolderName: "",
   groupDraft: "",
   groupMemberDraft: "",
@@ -68,9 +70,9 @@ let qrScanTimer = null;
 function defaultState() {
   return {
     users: [
-      { id: "ADD-1002", username: "mali", password: "1234", avatar: "", blocked: [] },
-      { id: "ADD-1003", username: "narin", password: "1234", avatar: "", blocked: [] },
-      { id: "ADD-1004", username: "studyteam", password: "1234", avatar: "", blocked: [] },
+      { id: "@mali", username: "mali", password: "1234", avatar: "", blocked: [] },
+      { id: "@narin", username: "narin", password: "1234", avatar: "", blocked: [] },
+      { id: "@studyteam", username: "studyteam", password: "1234", avatar: "", blocked: [] },
     ],
     friendships: [],
     customFolders: [],
@@ -111,7 +113,11 @@ function loadState() {
 }
 
 function normalizeUserId(id) {
-  return String(id || "").replace(/^TT-/, "ADD-");
+  const s = String(id || "");
+  // Already @username format
+  if (s.startsWith("@")) return s.toLowerCase();
+  // Legacy ADD-xxxx: try to find matching user by old id, else keep as-is
+  return s.replace(/^TT-/, "ADD-");
 }
 
 function migrateIds(data) {
@@ -314,18 +320,27 @@ function categoryFolder(category) {
 }
 
 function friendCode(user) {
-  return `TAITALK:${user.id}:${user.username}`;
+  return user.id; // @username is the friend code now
 }
 
 function userFromFriendCode(code) {
-  const cleaned = String(code || "").trim();
+  const cleaned = String(code || "").trim().toLowerCase();
+  // Support @username directly
+  if (cleaned.startsWith("@")) {
+    return state.users.find((user) => user.id.toLowerCase() === cleaned || user.username.toLowerCase() === cleaned.slice(1));
+  }
+  // Legacy TAITALK:ADD-xxx:username or TAITALK:@username:username
   const parts = cleaned.split(":");
-  const id = normalizeUserId(parts.length >= 2 && parts[0].toUpperCase() === "TAITALK" ? parts[1] : cleaned);
-  return state.users.find((user) => user.id.toLowerCase() === id.toLowerCase() || friendCode(user).toLowerCase() === cleaned.toLowerCase());
+  if (parts.length >= 2 && parts[0] === "taitalk") {
+    const idPart = parts[1];
+    return state.users.find((user) => user.id.toLowerCase() === idPart || user.username.toLowerCase() === idPart.replace(/^@/, ""));
+  }
+  // Fallback: search by username without @
+  return state.users.find((user) => user.username.toLowerCase() === cleaned || user.id.toLowerCase() === cleaned);
 }
 
 function renderQr(user) {
-  const code = friendCode(user);
+  const code = user.id; // @username
   const src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=12&data=${encodeURIComponent(code)}`;
   return `
     <div class="qr-card" aria-label="QR Code">
@@ -421,11 +436,11 @@ function folderCounts() {
 }
 
 function searchedUsers() {
-  const q = view.search.trim().toLowerCase();
+  const q = view.search.trim().toLowerCase().replace(/^@+/, "");
   if (!q) return [];
   return state.users
     .filter((user) => user.id !== sessionId && !isBlocked(sessionId, user.id))
-    .filter((user) => user.id.toLowerCase().includes(q) || user.username.toLowerCase().includes(q));
+    .filter((user) => user.username.toLowerCase().includes(q) || user.id.toLowerCase().includes(q));
 }
 
 function render() {
@@ -513,7 +528,7 @@ function renderRail(user) {
       <div class="search-wrap">
         <div class="global-search">
           <i data-lucide="search"></i>
-          <input value="${escapeAttr(view.search)}" data-action="chat-search" placeholder="${ui("ค้นหา User ID หรือข้อความ", "Search User ID or messages")}" />
+          <input value="${escapeAttr(view.search)}" data-action="chat-search" placeholder="${ui("ค้นหา @username หรือข้อความ", "Search @username or messages")}" />
           ${
             view.search.trim()
               ? `<button class="search-submit" data-action="submit-search">${ui("ค้นหา", "Search")}</button>`
@@ -727,7 +742,7 @@ function renderChat(chat) {
           ${avatarHtml(chatAvatar(chat), chatName(chat))}
           <div>
             <strong>${escapeHtml(chatName(chat))}</strong>
-            <div class="small">${chat.type === "group" ? `${chat.members.length} สมาชิก` : "User ID " + chat.members.find((id) => id !== sessionId)}</div>
+            <div class="small">${chat.type === "group" ? `${chat.members.length} สมาชิก` : byId(chat.members.find((id) => id !== sessionId))?.id || ""}</div>
           </div>
         </div>
         <div class="chat-actions">
@@ -871,44 +886,78 @@ function detailPanel(selected) {
 }
 
 function peoplePanel(selected) {
-  const q = view.peopleSearch.trim().toLowerCase();
   const user = currentUser();
-  const results = state.users.filter((item) => {
-    if (item.id === user.id) return false;
-    if (isBlocked(user.id, item.id)) return false;
-    if (!q) return true;
-    return item.username.toLowerCase().includes(q) || item.id.toLowerCase().includes(q);
-  });
   const currentOther = selected?.type === "direct" ? selected.members.find((id) => id !== sessionId) : null;
+
+  // Build friend search result HTML
+  let addResultHtml = "";
+  if (view.addFriendResult === "notfound") {
+    addResultHtml = `<p class="add-friend-error"><i data-lucide="user-x"></i>ไม่พบผู้ใช้ "${escapeHtml(view.addFriendQuery)}"</p>`;
+  } else if (view.addFriendResult && view.addFriendResult !== "notfound") {
+    const found = view.addFriendResult;
+    const isFriend = areFriends(user.id, found.id);
+    const isMe = found.id === sessionId;
+    addResultHtml = `
+      <div class="add-friend-card">
+        ${avatarHtml(found.avatar, found.username, "add-friend-avatar")}
+        <div class="add-friend-info">
+          <strong>${escapeHtml(found.username)}</strong>
+          <span class="add-friend-id">${escapeHtml(found.id)}</span>
+        </div>
+        ${isMe
+          ? `<span class="label">นี่คือคุณ</span>`
+          : isFriend
+          ? `<button class="ghost" data-action="open-user-chat" data-user="${found.id}"><i data-lucide="message-circle"></i>แชท</button>`
+          : `<button class="primary add-friend-btn" data-action="add-friend-confirm" data-user="${found.id}"><i data-lucide="user-plus"></i>เพิ่มเพื่อน</button>`
+        }
+      </div>
+    `;
+  }
+
+  // Friend list
+  const friends = state.users.filter((item) => item.id !== sessionId && areFriends(user.id, item.id));
+
   return `
     <div class="stack">
       <div class="block">
-        <h3>โปรไฟล์ของฉัน</h3>
-        <label class="profile-upload">
-          ${avatarHtml(user.avatar, user.username)}
-          <span><i data-lucide="camera"></i>เปลี่ยนรูปโปรไฟล์</span>
-          <input type="file" data-action="profile-avatar" accept="image/*" />
-        </label>
-        <div class="inline">
-          <input value="${escapeAttr(user.username)}" data-action="username-input" placeholder="Username ใหม่" />
-          <button class="ghost" data-action="save-username"><i data-lucide="save"></i></button>
-        </div>
-        <p class="hint">User ID ${user.id} เปลี่ยนไม่ได้</p>
-      </div>
-      <div class="block">
-        <h3>เพิ่มเพื่อนด้วย QR</h3>
-        <div class="qr-tools">
-          ${renderQr(user)}
-          <div class="stack">
-            <button class="ghost" data-action="copy-qr"><i data-lucide="copy"></i>คัดลอก QR Code</button>
-            <button class="ghost" data-action="open-scanner"><i data-lucide="camera"></i>เปิดกล้องสแกน</button>
-            <label class="field">สแกนหรือวางโค้ด QR
-              <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="TAITALK:ADD-1002:mali" />
-            </label>
-            <button class="primary" data-action="add-by-qr"><i data-lucide="scan-line"></i>เพิ่มจาก QR</button>
+        <h3>เพิ่มเพื่อน</h3>
+        <p class="hint">พิมพ์ @username ของเพื่อนแล้วกดค้นหา</p>
+        <div class="add-friend-search">
+          <div class="add-friend-input-row">
+            <span class="at-prefix">@</span>
+            <input
+              class="add-friend-input"
+              value="${escapeAttr(view.addFriendQuery.replace(/^@/, ""))}"
+              data-action="add-friend-query"
+              placeholder="username"
+              autocomplete="off"
+              autocorrect="off"
+              spellcheck="false"
+            />
           </div>
+          <button class="primary" data-action="search-add-friend">
+            <i data-lucide="search"></i>ค้นหา
+          </button>
         </div>
+        ${addResultHtml}
       </div>
+
+      <div class="block">
+        <h3>เพื่อนของฉัน (${friends.length})</h3>
+        ${friends.length ? friends.map((person) => `
+          <div class="result-row">
+            ${avatarHtml(person.avatar, person.username)}
+            <div>
+              <strong>${escapeHtml(person.username)}</strong>
+              <div class="small">${escapeHtml(person.id)}</div>
+            </div>
+            <button class="ghost" data-action="open-user-chat" data-user="${person.id}">
+              <i data-lucide="message-circle"></i>แชท
+            </button>
+          </div>
+        `).join("") : `<p class="empty">ยังไม่มีเพื่อน — ค้นหาด้วย @username ด้านบน</p>`}
+      </div>
+
       ${
         currentOther
           ? `<div class="block">
@@ -917,22 +966,16 @@ function peoplePanel(selected) {
             </div>`
           : ""
       }
+
       <div class="block">
-        <h3>ค้นหาและเพิ่มเพื่อน</h3>
-        ${results.map((person) => {
-          const friend = areFriends(user.id, person.id);
-          return `
-            <div class="result-row">
-              <div>
-                <strong>${escapeHtml(person.username)}</strong>
-                <div class="small">${person.id}</div>
-              </div>
-              <button class="ghost" data-action="${friend ? "open-user-chat" : "add-friend"}" data-user="${person.id}">
-                <i data-lucide="${friend ? "message-circle" : "user-plus"}"></i>${friend ? "แชท" : "เพิ่ม"}
-              </button>
-            </div>
-          `;
-        }).join("")}
+        <h3>เพิ่มเพื่อนด้วย QR</h3>
+        <div class="qr-tools">
+          ${renderQr(user)}
+          <div class="stack">
+            <button class="ghost" data-action="copy-qr"><i data-lucide="copy"></i>คัดลอก @username</button>
+            <button class="ghost" data-action="open-scanner"><i data-lucide="camera"></i>เปิดกล้องสแกน</button>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -1209,7 +1252,7 @@ function renderScanner() {
         </div>
         <p class="hint">${escapeHtml(view.scannerStatus)}</p>
         <label class="field">หรือวางโค้ด QR
-          <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="TAITALK:ADD-1002:mali" />
+          <input value="${escapeAttr(view.qrInput)}" data-action="qr-input" placeholder="@username" />
         </label>
         <div class="modal-actions">
           <button class="ghost" data-action="close-scanner">ปิด</button>
@@ -1270,7 +1313,7 @@ function handleAuth(form, mode) {
   const confirm = String(data.get("confirm") || "");
   if (password !== confirm) return showAuthError("Password และ Confirm Password ต้องตรงกัน");
   if (state.users.some((item) => item.username.toLowerCase() === username.toLowerCase())) return showAuthError("Username นี้ถูกใช้แล้ว");
-  const user = { id: `ADD-${Math.floor(1000 + Math.random() * 9000)}`, username, password, avatar: "", blocked: [] };
+  const user = { id: `@${username.toLowerCase()}`, username, password, avatar: "", blocked: [] };
   state.users.push(user);
   saveState();
   sessionId = user.id;
@@ -1377,6 +1420,10 @@ app.addEventListener("input", (event) => {
     view.screen = "list";
     view.manageMode = false;
     render();
+  }
+  if (action === "add-friend-query") {
+    view.addFriendQuery = event.target.value;
+    view.addFriendResult = null; // clear result while typing
   }
   if (action === "people-search") {
     view.peopleSearch = event.target.value;
@@ -1572,6 +1619,34 @@ app.addEventListener("click", (event) => {
       saveState();
       render();
     }
+  }
+  if (action === "search-add-friend") {
+    const raw = view.addFriendQuery.trim().toLowerCase().replace(/^@+/, "");
+    if (!raw) return;
+    const query = `@${raw}`;
+    const found = state.users.find(
+      (u) => u.id.toLowerCase() === query || u.username.toLowerCase() === raw
+    );
+    if (!found || isBlocked(sessionId, found?.id)) {
+      view.addFriendResult = "notfound";
+    } else {
+      view.addFriendResult = found;
+    }
+    render();
+  }
+  if (action === "add-friend-confirm") {
+    const otherId = target.dataset.user;
+    addFriend(sessionId, otherId);
+    const chat = ensureChatForUser(otherId);
+    // Update chat tags to Main since they're now friends
+    if (chat.tags.includes("Request")) chat.tags = ["Main"];
+    view.addFriendResult = null;
+    view.addFriendQuery = "";
+    view.folder = "Main";
+    view.chatId = chat.id;
+    view.screen = "chat";
+    saveState();
+    render();
   }
   if (action === "add-friend" || action === "open-user-chat") {
     const otherId = target.dataset.user;
