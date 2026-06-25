@@ -4,8 +4,11 @@ const AD_KEYWORDS = ["โปรโมชั่น","ลดราคา","sale","
 const DEFAULT_FOLDERS = ["Main","Important","Advertising","Request","Group","Work","Study","Friends","Family"];
 const STORAGE_KEY = "taitalk:v2";
 const SESSION_KEY = "taitalk:v2:session";
+const SYNC_CHANNEL = "taitalk:v2:sync";
+const TAB_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const app = document.querySelector("#app");
 let didMigrateState = false;
+let syncChannel = null;
 
 // ─── State ───────────────────────────────────────────────────
 function defaultState() {
@@ -40,11 +43,34 @@ function loadState() {
   } catch { return defaultState(); }
 }
 
-function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function storedSession() {
+  return sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY) || null;
+}
+
+function setStoredSession(id) {
+  sessionStorage.setItem(SESSION_KEY, id);
+  localStorage.removeItem(SESSION_KEY);
+}
+
+function clearStoredSession() {
+  sessionStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(SESSION_KEY);
+}
+
+function broadcastStateChange() {
+  syncChannel?.postMessage({ type: "state-updated", source: TAB_ID, at: Date.now() });
+  localStorage.setItem(`${STORAGE_KEY}:pulse`, `${TAB_ID}:${Date.now()}`);
+}
+
+function saveState({ silent = false } = {}) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!silent) broadcastStateChange();
+}
 
 let state = loadState();
-let sessionId = localStorage.getItem(SESSION_KEY) || null;
-if (didMigrateState) saveState();
+let sessionId = storedSession();
+if (sessionId && !sessionStorage.getItem(SESSION_KEY)) setStoredSession(sessionId);
+if (didMigrateState) saveState({ silent: true });
 
 let view = {
   authMode: "register",
@@ -140,7 +166,7 @@ function switchToChatMember(chatId, userId) {
   const chat = state.chats.find(c => c.id === chatId && c.members.includes(userId));
   if (!chat || !byId(userId)) return;
   sessionId = userId;
-  localStorage.setItem(SESSION_KEY, sessionId);
+  setStoredSession(sessionId);
   view.chatId = chat.id;
   view.folder = chat.tags.includes("Request") ? "Request" : chat.tags.includes("Main") ? "Main" : chat.tags[0] || "Main";
   view.screen = "chat";
@@ -197,7 +223,7 @@ function migrateStateIds(data) {
   }
   const savedSession = localStorage.getItem(SESSION_KEY);
   if (savedSession && convert(savedSession) !== savedSession) {
-    localStorage.setItem(SESSION_KEY, convert(savedSession));
+    setStoredSession(convert(savedSession));
     didMigrateState = true;
   }
   return data;
@@ -315,7 +341,7 @@ function handleAuth(form, mode) {
     const user = state.users.find(u => u.username.toLowerCase()===username.toLowerCase() && u.password===password);
     if (!user) { showAuthError("Username หรือ Password ไม่ถูกต้อง"); return; }
     sessionId = user.id;
-    localStorage.setItem(SESSION_KEY, sessionId);
+    setStoredSession(sessionId);
     view._authUser=""; view._authPass="";
     view.screen="home"; render(); return;
   }
@@ -329,7 +355,7 @@ function handleAuth(form, mode) {
   state.users.push(user);
   saveState();
   sessionId = newId;
-  localStorage.setItem(SESSION_KEY, sessionId);
+  setStoredSession(sessionId);
   view._authUser=""; view._authPass="";
   view.screen="home"; render();
 }
@@ -970,7 +996,7 @@ app.addEventListener("click", e => {
     view.authMode = t.dataset.mode; render();
   }
   if (action==="logout") {
-    sessionId=null; localStorage.removeItem(SESSION_KEY);
+    sessionId=null; clearStoredSession();
     view.screen="home"; view.authMode="register"; render();
   }
   if (action==="folder") {
@@ -1104,6 +1130,36 @@ app.addEventListener("click", e => {
   }
   if (action==="group-draft") { /* input handled above */ }
   if (action==="language") { state.appSettings.language=t.dataset.value||state.appSettings.language; saveState(); render(); }
+});
+
+function syncFromSharedState() {
+  state = loadState();
+  if (sessionId && !currentUser()) {
+    sessionId = null;
+    clearStoredSession();
+  }
+  if (view.chatId && !state.chats.some(c => c.id === view.chatId && c.members.includes(sessionId))) {
+    view.chatId = null;
+  }
+  render();
+}
+
+let syncTimer = null;
+function scheduleSharedSync() {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncFromSharedState, 30);
+}
+
+if ("BroadcastChannel" in window) {
+  syncChannel = new BroadcastChannel(SYNC_CHANNEL);
+  syncChannel.onmessage = (event) => {
+    if (event.data?.type === "state-updated" && event.data.source !== TAB_ID) scheduleSharedSync();
+  };
+}
+
+window.addEventListener("storage", (event) => {
+  if (event.key === `${STORAGE_KEY}:pulse` && event.newValue?.startsWith(`${TAB_ID}:`)) return;
+  if (event.key === STORAGE_KEY || event.key === `${STORAGE_KEY}:pulse`) scheduleSharedSync();
 });
 
 render();
