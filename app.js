@@ -6,9 +6,15 @@ const STORAGE_KEY = "taitalk:v2";
 const SESSION_KEY = "taitalk:v2:session";
 const SYNC_CHANNEL = "taitalk:v2:sync";
 const TAB_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const API_BASE = window.TAITALK_API_BASE || "";
 const app = document.querySelector("#app");
 let didMigrateState = false;
 let syncChannel = null;
+let remoteStateVersion = 0;
+let remoteAvailable = false;
+let remoteSaveTimer = null;
+let pendingRemoteSave = false;
+let remoteSaving = false;
 
 // ─── State ───────────────────────────────────────────────────
 function defaultState() {
@@ -62,9 +68,10 @@ function broadcastStateChange() {
   localStorage.setItem(`${STORAGE_KEY}:pulse`, `${TAB_ID}:${Date.now()}`);
 }
 
-function saveState({ silent = false } = {}) {
+function saveState({ silent = false, remote = true } = {}) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   if (!silent) broadcastStateChange();
+  if (remote) queueRemoteSave();
 }
 
 let state = loadState();
@@ -328,6 +335,80 @@ function folderCounts() {
     }
   }
   return counts;
+}
+
+function canUseRemoteSync() {
+  return location.protocol === "http:" || location.protocol === "https:";
+}
+
+async function pullRemoteState() {
+  if (!canUseRemoteSync()) return false;
+  if (pendingRemoteSave || remoteSaving) return false;
+  try {
+    const res = await fetch(`${API_BASE}/api/state`, { cache: "no-store" });
+    if (!res.ok) throw new Error("remote unavailable");
+    const data = await res.json();
+    remoteAvailable = true;
+    remoteStateVersion = data.version || remoteStateVersion;
+    state = migrateStateIds(data.state || defaultState());
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
+  } catch {
+    remoteAvailable = false;
+    return false;
+  }
+}
+
+function queueRemoteSave() {
+  if (!canUseRemoteSync()) return;
+  pendingRemoteSave = true;
+  clearTimeout(remoteSaveTimer);
+  remoteSaveTimer = setTimeout(pushRemoteState, 120);
+}
+
+async function pushRemoteState() {
+  if (!canUseRemoteSync()) return;
+  pendingRemoteSave = false;
+  remoteSaving = true;
+  try {
+    const res = await fetch(`${API_BASE}/api/state`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId: TAB_ID, state }),
+    });
+    if (!res.ok) throw new Error("remote save failed");
+    const data = await res.json();
+    remoteAvailable = true;
+    remoteStateVersion = data.version || remoteStateVersion;
+    state = migrateStateIds(data.state || state);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    broadcastStateChange();
+    render();
+  } catch {
+    remoteAvailable = false;
+  } finally {
+    remoteSaving = false;
+  }
+}
+
+function startRemoteRealtime() {
+  if (!canUseRemoteSync()) return;
+  if ("EventSource" in window) {
+    const events = new EventSource(`${API_BASE}/api/events?clientId=${encodeURIComponent(TAB_ID)}`);
+    events.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data || "{}");
+        if (data.clientId !== TAB_ID && (!remoteStateVersion || data.version > remoteStateVersion)) {
+          await pullRemoteState();
+          syncFromSharedState({ fromRemote: true });
+        }
+      } catch {}
+    };
+  }
+  setInterval(async () => {
+    const before = remoteStateVersion;
+    if (await pullRemoteState() && remoteStateVersion !== before) syncFromSharedState({ fromRemote: true });
+  }, 3000);
 }
 
 // ─── Auth ─────────────────────────────────────────────────────
@@ -1132,8 +1213,8 @@ app.addEventListener("click", e => {
   if (action==="language") { state.appSettings.language=t.dataset.value||state.appSettings.language; saveState(); render(); }
 });
 
-function syncFromSharedState() {
-  state = loadState();
+function syncFromSharedState({ fromRemote = false } = {}) {
+  if (!fromRemote) state = loadState();
   if (sessionId && !currentUser()) {
     sessionId = null;
     clearStoredSession();
@@ -1162,4 +1243,10 @@ window.addEventListener("storage", (event) => {
   if (event.key === STORAGE_KEY || event.key === `${STORAGE_KEY}:pulse`) scheduleSharedSync();
 });
 
-render();
+async function initApp() {
+  await pullRemoteState();
+  startRemoteRealtime();
+  render();
+}
+
+initApp();

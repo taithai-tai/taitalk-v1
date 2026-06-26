@@ -30,7 +30,24 @@ TaiTalk V1 is a local-first LINE-style chat prototype that implements the final 
 - Per-folder/tag notification settings
 - Voice Call and Video Call buttons that show a safe popup only
 
-Open `index.html` in a browser to try it.
+Run locally with the realtime server:
+
+```sh
+npm start
+```
+
+Then open `http://localhost:3000`.
+
+Deploy on Railway:
+
+1. Create a Railway project from this GitHub repository.
+2. Railway will detect the Node app and run `npm start`.
+3. Generate a public domain in Railway Networking.
+4. Open that Railway URL on every phone. All phones will use the same server state and realtime sync.
+
+For durable production data, attach a Railway Volume and set `DATA_DIR` to the mounted path, for example `/data`.
+
+You can still open `index.html` directly for offline UI testing, but cross-device sync only works through the Node server.
 
 The app now starts on the registration screen. Create a new account first, then use the friend search or QR scanner to find `mali`, `narin`, or `studyteam` for testing chats.
 
