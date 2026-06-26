@@ -26,6 +26,7 @@ function defaultState() {
     ],
     friendships: [],
     customFolders: [],
+    deletedFolders: [],
     appSettings: { fontSize: "normal", theme: "light", language: "th" },
     folderSettings: Object.fromEntries(DEFAULT_FOLDERS.map(f => [f, {
       notify: f !== "Advertising", bump: f !== "Advertising", badge: true, highlight: true,
@@ -47,6 +48,7 @@ function loadState() {
       folderSettings: { ...base.folderSettings, ...(parsed.folderSettings || {}) },
       appSettings:    { ...base.appSettings,    ...(parsed.appSettings    || {}) },
       customFolders:  parsed.customFolders || [],
+      deletedFolders: parsed.deletedFolders || [],
     });
   } catch { return defaultState(); }
 }
@@ -258,7 +260,8 @@ function areFriends(a, b) { return state.friendships.some(p => p.includes(a) && 
 function addFriendPair(a, b) { if (!areFriends(a, b)) state.friendships.push([a, b]); }
 function removeFriendPair(a, b) { state.friendships = state.friendships.filter(p => !(p.includes(a) && p.includes(b))); }
 function rawFolderNames() {
-  return unique([...DEFAULT_FOLDERS, ...(state.customFolders||[])]);
+  const deleted = new Set((state.deletedFolders || []).filter(f => !DEFAULT_FOLDERS.includes(f)));
+  return unique([...DEFAULT_FOLDERS, ...(state.customFolders||[])]).filter(f => !deleted.has(f));
 }
 function folderNames() {
   return rawFolderNames()
@@ -1423,6 +1426,7 @@ app.addEventListener("click", e => {
     const name=view.newFolderName.trim(); if (!name) return;
     if (folderNames().some(f=>f.toLowerCase()===name.toLowerCase())) { alert("มี Folder นี้แล้ว"); return; }
     state.customFolders=unique([...(state.customFolders||[]),name]);
+    state.deletedFolders=(state.deletedFolders||[]).filter(x=>x!==name);
     state.folderSettings[name]={notify:true,bump:true,badge:true,highlight:true,order:rawFolderNames().length,keywords:""};
     view.newFolderName=""; view.folder=name; view.folderSettingTarget=name;
     view.showNewFolderInput = false;
@@ -1430,7 +1434,9 @@ app.addEventListener("click", e => {
   }
   if (action==="delete-folder") {
     const f=t.dataset.folder;
+    if (DEFAULT_FOLDERS.includes(f)) return;
     state.customFolders=(state.customFolders||[]).filter(x=>x!==f);
+    state.deletedFolders=unique([...(state.deletedFolders||[]),f]);
     delete state.folderSettings[f];
     state.chats.forEach(c=>{ c.tags=c.tags.filter(x=>x!==f); if(!c.tags.length)c.tags=["Main"]; });
     if (view.folder===f) view.folder="Main";

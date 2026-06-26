@@ -35,6 +35,7 @@ function defaultState() {
     ],
     friendships: [],
     customFolders: [],
+    deletedFolders: [],
     appSettings: { fontSize: "normal", theme: "light", language: "th" },
     folderSettings: Object.fromEntries(DEFAULT_FOLDERS.map(f => [f, {
       notify: f !== "Advertising", bump: f !== "Advertising", badge: true, highlight: true
@@ -74,6 +75,7 @@ function normalizeState(state) {
     users: state.users || base.users,
     friendships: state.friendships || [],
     customFolders: state.customFolders || [],
+    deletedFolders: state.deletedFolders || [],
     appSettings: { ...base.appSettings, ...(state.appSettings || {}) },
     folderSettings: { ...base.folderSettings, ...(state.folderSettings || {}) },
     chats: state.chats || [],
@@ -158,6 +160,13 @@ function mergeChats(current, incoming) {
 function mergeState(currentState, incomingState) {
   const current = normalizeState(currentState);
   const incoming = normalizeState(incomingState);
+  const deletedFolders = unique([...(current.deletedFolders || []), ...(incoming.deletedFolders || [])])
+    .filter(folder => !DEFAULT_FOLDERS.includes(folder));
+  const deletedFolderSet = new Set(deletedFolders);
+  const customFolders = unique([...current.customFolders, ...incoming.customFolders])
+    .filter(folder => !deletedFolderSet.has(folder));
+  const folderSettings = { ...current.folderSettings, ...incoming.folderSettings };
+  for (const folder of deletedFolderSet) delete folderSettings[folder];
   const friendshipMap = new Map();
   for (const pair of [...current.friendships, ...incoming.friendships]) {
     if (Array.isArray(pair) && pair.length === 2) friendshipMap.set(pairKey(pair), pair);
@@ -166,9 +175,10 @@ function mergeState(currentState, incomingState) {
     ...current,
     users: mergeUsers(current.users, incoming.users),
     friendships: [...friendshipMap.values()],
-    customFolders: unique([...current.customFolders, ...incoming.customFolders]),
+    customFolders,
+    deletedFolders,
     appSettings: { ...current.appSettings, ...incoming.appSettings },
-    folderSettings: { ...current.folderSettings, ...incoming.folderSettings },
+    folderSettings,
     chats: mergeChats(current.chats, incoming.chats),
   });
 }
