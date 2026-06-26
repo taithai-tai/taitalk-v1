@@ -28,7 +28,9 @@ function defaultState() {
     customFolders: [],
     appSettings: { fontSize: "normal", theme: "light", language: "th" },
     folderSettings: Object.fromEntries(DEFAULT_FOLDERS.map(f => [f, {
-      notify: f !== "Advertising", bump: f !== "Advertising", badge: true, highlight: true
+      notify: f !== "Advertising", bump: f !== "Advertising", badge: true, highlight: true,
+      order: DEFAULT_FOLDERS.indexOf(f) + 1,
+      keywords: f === "Important" ? IMPORTANT_KEYWORDS.join(", ") : f === "Advertising" ? AD_KEYWORDS.join(", ") : ""
     }])),
     chats: [],
   };
@@ -99,6 +101,7 @@ let view = {
   scannerStatus: "กำลังเตรียมกล้อง...",
   chatSettingsOpen: false,
   chatSearch: "",
+  folderSettingTarget: "Main",
   _authUser: "", _authPass: "",
 };
 
@@ -249,16 +252,42 @@ function isBlocked(a, b) {
 }
 function areFriends(a, b) { return state.friendships.some(p => p.includes(a) && p.includes(b)); }
 function addFriendPair(a, b) { if (!areFriends(a, b)) state.friendships.push([a, b]); }
-function folderNames() { return unique([...DEFAULT_FOLDERS, ...(state.customFolders||[])]); }
+function removeFriendPair(a, b) { state.friendships = state.friendships.filter(p => !(p.includes(a) && p.includes(b))); }
+function rawFolderNames() {
+  return unique([...DEFAULT_FOLDERS, ...(state.customFolders||[])]);
+}
+function folderNames() {
+  return rawFolderNames()
+    .sort((a, b) => (ensureFolderSetting(a).order ?? 999) - (ensureFolderSetting(b).order ?? 999) || a.localeCompare(b));
+}
 function ensureFolderSetting(f) {
-  if (!state.folderSettings[f]) state.folderSettings[f] = {notify:true,bump:true,badge:true,highlight:true};
+  if (!state.folderSettings[f]) state.folderSettings[f] = {notify:true,bump:true,badge:true,highlight:true,order:rawFolderNames().indexOf(f)+1,keywords:""};
+  state.folderSettings[f] = {
+    notify: true,
+    bump: true,
+    badge: true,
+    highlight: true,
+    order: rawFolderNames().indexOf(f) + 1,
+    keywords: "",
+    ...state.folderSettings[f],
+  };
   return state.folderSettings[f];
+}
+function keywordList(value) {
+  return String(value || "").split(/[,|\n]/).map(k => k.trim().toLowerCase()).filter(Boolean);
 }
 function classifyMessage(text) {
   const t = text.toLowerCase();
-  if (AD_KEYWORDS.some(k => t.includes(k.toLowerCase()))) return "advertising";
-  if (IMPORTANT_KEYWORDS.some(k => t.includes(k.toLowerCase()))) return "important";
+  if (keywordList(ensureFolderSetting("Advertising").keywords || AD_KEYWORDS.join(",")).some(k => t.includes(k))) return "advertising";
+  if (keywordList(ensureFolderSetting("Important").keywords || IMPORTANT_KEYWORDS.join(",")).some(k => t.includes(k))) return "important";
   return "normal";
+}
+function foldersForMessage(text) {
+  const t = text.toLowerCase();
+  return folderNames().filter((folder) => {
+    const keys = keywordList(ensureFolderSetting(folder).keywords);
+    return keys.length && keys.some(k => t.includes(k));
+  });
 }
 function chatName(chat) {
   if (chat.type === "group") return chat.name;
@@ -470,6 +499,7 @@ function sendMessage(text, file) {
   if (chat.tags.includes("Request")) { chat.tags=["Main"]; recipients.forEach(m=>addFriendPair(sessionId,m)); }
   if (category==="advertising") chat.tags=unique(["Advertising",...chat.tags.filter(t=>t!=="Important")]);
   if (category==="important"&&!chat.tags.includes("Advertising")) chat.tags=unique(["Important",...chat.tags]);
+  chat.tags = unique([...foldersForMessage(`${text} ${file?.name||""}`), ...chat.tags]);
   if (chat.type==="group") chat.tags=unique(["Group",...chat.tags]);
   for (const m of recipients) {
     chat.unread[m]=(chat.unread[m]||0)+1;
@@ -663,16 +693,27 @@ function renderChatRow(chat) {
     chat.tags.includes("Advertising")?`<span class="label ad">Advertising</span>`:"",
     chat.type==="group"?`<span class="label">Group</span>`:"",
   ].join("");
-  return `<button class="chat-row${view.chatId===chat.id?" active":""} ${highlight}" data-action="${view.manageMode?"toggle-chat-select":"select-chat"}" data-chat="${chat.id}">
-  ${view.manageMode?`<span class="check-dot${view.selectedChatIds.includes(chat.id)?" checked":""}"><i data-lucide="check"></i></span>`:""}
-  ${avatarHtml(chatAvatar(chat),chatName(chat))}
-  <span class="preview">
-    <strong>${esc(chatName(chat))}</strong>
-    <span class="small">${latest?esc(latest.unsent?"ยกเลิกข้อความแล้ว":latest.file?latest.file.name:latest.text):"เริ่มแชท"}</span>
-    <span class="labels">${chat.pinnedFor?.includes(user.id)?`<span class="label">Pinned</span>`:""}${chat.mutedFor?.includes(user.id)?`<span class="label">Muted</span>`:""}${labels}</span>
-  </span>
-  <span><time>${latest?formatTime(latest.createdAt):""}</time>${unread?`<span class="badge">${unread}</span>`:""}</span>
-</button>`;
+  return `<div class="chat-swipe">
+  <div class="swipe-actions left">
+    <button class="mini" data-action="chat-quick" data-quick="pin" data-chat="${chat.id}">ปักหมุด</button>
+    <button class="mini" data-action="chat-quick" data-quick="read" data-chat="${chat.id}">อ่านแล้ว</button>
+  </div>
+  <button class="chat-row${view.chatId===chat.id?" active":""} ${highlight}" data-action="${view.manageMode?"toggle-chat-select":"select-chat"}" data-chat="${chat.id}">
+    ${view.manageMode?`<span class="check-dot${view.selectedChatIds.includes(chat.id)?" checked":""}"><i data-lucide="check"></i></span>`:""}
+    ${avatarHtml(chatAvatar(chat),chatName(chat))}
+    <span class="preview">
+      <strong>${esc(chatName(chat))}</strong>
+      <span class="small">${latest?esc(latest.unsent?"ยกเลิกข้อความแล้ว":latest.file?latest.file.name:latest.text):"เริ่มแชท"}</span>
+      <span class="labels">${chat.pinnedFor?.includes(user.id)?`<span class="label">Pinned</span>`:""}${chat.mutedFor?.includes(user.id)?`<span class="label">Muted</span>`:""}${labels}</span>
+    </span>
+    <span><time>${latest?formatTime(latest.createdAt):""}</time>${unread?`<span class="badge">${unread}</span>`:""}</span>
+  </button>
+  <div class="swipe-actions right">
+    <button class="mini" data-action="chat-quick" data-quick="mute" data-chat="${chat.id}">ปิดเสียง</button>
+    <button class="mini" data-action="chat-quick" data-quick="hide" data-chat="${chat.id}">ซ่อน</button>
+    <button class="mini danger" data-action="chat-quick" data-quick="delete" data-chat="${chat.id}">ลบ</button>
+  </div>
+</div>`;
 }
 
 function renderChat(chat) {
@@ -790,6 +831,16 @@ function peoplePanel(selected) {
 
   return `<div class="stack">
   <div class="block">
+    <h3>เพื่อนทั้งหมด (${friends.length})</h3>
+    ${friends.length ? friends.map(f=>`
+    <div class="friend-card">
+      ${avatarHtml(f.avatar,userName(f))}
+      <div><strong>${esc(userName(f))}</strong><div class="small">${esc(f.id)}</div></div>
+      <button class="ghost" data-action="open-user-chat" data-user="${f.id}"><i data-lucide="message-circle"></i>แชท</button>
+      <button class="mini danger" data-action="remove-friend" data-user="${f.id}">ลบ</button>
+    </div>`).join("") : `<p class="empty">ยังไม่มีเพื่อน เพิ่มด้วย @username หรือรายชื่อแนะนำด้านล่าง</p>`}
+  </div>
+  <div class="block">
     <h3>เพิ่มเพื่อนด้วย @username</h3>
     <p class="hint">พิมพ์ @mali หรือ username แล้วกดค้นหา</p>
     <form class="add-friend-search" data-action="do-search-friend">
@@ -802,12 +853,12 @@ function peoplePanel(selected) {
     ${resultHtml}
   </div>
   <div class="block">
-    <h3>เพื่อนของฉัน (${friends.length})</h3>
+    <h3>รายการเพื่อนแบบย่อ</h3>
     ${friends.length ? friends.map(f=>`
     <div class="result-row">
       ${avatarHtml(f.avatar,userName(f))}
       <div><strong>${esc(userName(f))}</strong><div class="small">${esc(f.id)}</div></div>
-      <button class="ghost" data-action="open-user-chat" data-user="${f.id}"><i data-lucide="message-circle"></i>แชท</button>
+      <button class="mini danger" data-action="remove-friend" data-user="${f.id}">ลบ</button>
     </div>`).join("") : `<p class="empty">ยังไม่มีเพื่อน</p>`}
   </div>
   <div class="block">
@@ -905,15 +956,38 @@ function settingsPanel() {
   <label class="field">${ui("ภาษา","Language")}<select data-action="language"><option value="th" ${state.appSettings.language==="th"?"selected":""}>ไทย</option><option value="en" ${state.appSettings.language==="en"?"selected":""}>English</option></select></label>
   <label class="field">${ui("ขนาดตัวหนังสือ","Font size")}<select data-action="font-size"><option value="small" ${state.appSettings.fontSize==="small"?"selected":""}>เล็ก</option><option value="normal" ${state.appSettings.fontSize==="normal"?"selected":""}>ปกติ</option><option value="large" ${state.appSettings.fontSize==="large"?"selected":""}>ใหญ่</option></select></label>
   <label class="switch-row"><span>${ui("ธีมมืด","Dark mode")}</span><input type="checkbox" ${state.appSettings.theme==="dark"?"checked":""} data-action="theme-toggle" /></label>
-</div></div>`;
+</div><div class="block"><h3>โฟลเดอร์</h3><button class="primary full" data-action="detail-tab" data-tab="folders"><i data-lucide="folder-cog"></i>ตั้งค่าโฟลเดอร์</button></div></div>`;
 }
 
 function folderSettingsPanel() {
-  return `<div class="stack">${folderNames().map(f=>{const s=ensureFolderSetting(f);return`<div class="block"><h3>${esc(f)}</h3>
-  <label class="switch-row"><span>แจ้งเตือน</span><input type="checkbox" ${s.notify?"checked":""} data-action="folder-setting" data-folder="${f}" data-key="notify" /></label>
-  <label class="switch-row"><span>ดันแชทขึ้นบน</span><input type="checkbox" ${s.bump?"checked":""} data-action="folder-setting" data-folder="${f}" data-key="bump" /></label>
-  <label class="switch-row"><span>แสดง Badge</span><input type="checkbox" ${s.badge?"checked":""} data-action="folder-setting" data-folder="${f}" data-key="badge" /></label>
-  </div>`}).join("")}</div>`;
+  if (!folderNames().includes(view.folderSettingTarget)) view.folderSettingTarget = folderNames()[0] || "Main";
+  const f = view.folderSettingTarget;
+  const s = ensureFolderSetting(f);
+  return `<div class="stack">
+  <div class="block">
+    <h3>เลือกโฟลเดอร์ที่จะตั้งค่า</h3>
+    <select data-action="folder-setting-target">${folderNames().map(name=>`<option value="${esc(name)}" ${name===f?"selected":""}>${esc(name)}</option>`).join("")}</select>
+  </div>
+  <div class="block">
+    <h3>${esc(f)}</h3>
+    <label class="field">ลำดับโฟลเดอร์<input type="number" min="1" value="${Number(s.order||1)}" data-action="folder-order" data-folder="${esc(f)}" /></label>
+    <label class="switch-row"><span>แจ้งเตือนโฟลเดอร์นี้</span><input type="checkbox" ${s.notify?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="notify" /></label>
+    <label class="switch-row"><span>ดันแชทขึ้นบนเมื่อมีข้อความใหม่</span><input type="checkbox" ${s.bump?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="bump" /></label>
+    <label class="switch-row"><span>แสดง Badge จำนวนข้อความ</span><input type="checkbox" ${s.badge?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="badge" /></label>
+    <label class="switch-row"><span>Highlight ข้อความใหม่</span><input type="checkbox" ${s.highlight?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="highlight" /></label>
+    <label class="field">Detect keywords เพื่อเข้าโฟลเดอร์นี้อัตโนมัติ<textarea data-action="folder-keywords" data-folder="${esc(f)}" placeholder="เช่น homework, งาน, นัด">${esc(s.keywords||"")}</textarea></label>
+    <p class="hint">คั่นคำด้วย comma หรือขึ้นบรรทัดใหม่ เช่น Important และ Advertising</p>
+    ${DEFAULT_FOLDERS.includes(f) ? `<span class="label">Default folder</span>` : `<button class="ghost danger" data-action="delete-folder" data-folder="${esc(f)}"><i data-lucide="trash-2"></i>ลบโฟลเดอร์นี้</button>`}
+  </div>
+  <div class="block">
+    <h3>สร้างโฟลเดอร์เพิ่ม</h3>
+    <div class="inline"><input value="${esc(view.newFolderName)}" data-action="new-folder-name" placeholder="ชื่อ Folder" /><button class="primary" data-action="create-folder"><i data-lucide="folder-plus"></i>สร้าง</button></div>
+  </div>
+  <div class="block">
+    <h3>โฟลเดอร์ทั้งหมด</h3>
+    ${folderNames().map(name=>`<button class="folder-manage-row${name===f?" active":""}" data-action="folder-setting-target-button" data-folder="${esc(name)}"><span>${esc(name)}</span><span class="small">ลำดับ ${Number(ensureFolderSetting(name).order||1)}</span></button>`).join("")}
+  </div>
+</div>`;
 }
 
 function createFolderPanel() {
@@ -1040,6 +1114,14 @@ app.addEventListener("input", e => {
   if (action==="group-member-draft") view.groupMemberDraft = e.target.value;
   if (action==="qr-input")        view.qrInput        = e.target.value;
   if (action==="chat-settings-search") { view.chatSearch = e.target.value; render(); }
+  if (action==="folder-order") {
+    ensureFolderSetting(e.target.dataset.folder).order = Math.max(1, Number(e.target.value || 1));
+    saveState();
+  }
+  if (action==="folder-keywords") {
+    ensureFolderSetting(e.target.dataset.folder).keywords = e.target.value;
+    saveState();
+  }
   if (action==="auth-tab-user")   view._authUser      = e.target.value;
   if (action==="auth-tab-pass")   view._authPass      = e.target.value;
 });
@@ -1059,6 +1141,10 @@ app.addEventListener("change", e => {
   if (action==="folder-setting") {
     ensureFolderSetting(e.target.dataset.folder)[e.target.dataset.key]=e.target.checked;
     saveState(); render();
+  }
+  if (action==="folder-setting-target") {
+    view.folderSettingTarget = e.target.value;
+    render();
   }
   if (action==="font-size")    { state.appSettings.fontSize=e.target.value; saveState(); render(); }
   if (action==="language")     { state.appSettings.language=e.target.value; saveState(); render(); }
@@ -1101,6 +1187,23 @@ app.addEventListener("click", e => {
       if (type==="read") { chat.unread[sessionId]=0; chat.importantUnread[sessionId]=0; chat.messages.forEach(m=>{if(m.senderId!==sessionId&&!m.readAt)m.readAt=Date.now();}); }
     }
     view.selectedChatIds=[]; view.manageMode=false; saveState(); render();
+  }
+  if (action==="chat-quick") {
+    const chat=state.chats.find(c=>c.id===t.dataset.chat&&c.members.includes(sessionId));
+    const type=t.dataset.quick;
+    if (chat) {
+      if (type==="pin") {
+        const pinned=chat.pinnedFor?.includes(sessionId);
+        chat.pinnedFor=pinned ? (chat.pinnedFor||[]).filter(id=>id!==sessionId) : unique([...(chat.pinnedFor||[]),sessionId]);
+      }
+      if (type==="mute") {
+        const muted=chat.mutedFor?.includes(sessionId);
+        chat.mutedFor=muted ? (chat.mutedFor||[]).filter(id=>id!==sessionId) : unique([...(chat.mutedFor||[]),sessionId]);
+      }
+      if (type==="hide"||type==="delete") chat.hiddenFor=unique([...(chat.hiddenFor||[]),sessionId]);
+      if (type==="read") { chat.unread[sessionId]=0; chat.importantUnread[sessionId]=0; chat.messages.forEach(m=>{if(m.senderId!==sessionId&&!m.readAt)m.readAt=Date.now();}); }
+      saveState(); render();
+    }
   }
   if (action==="select-chat") {
     view.chatId=t.dataset.chat; view.screen="chat";
@@ -1166,6 +1269,11 @@ app.addEventListener("click", e => {
     state.chats=state.chats.filter(c=>!(c.type==="direct"&&c.members.includes(sessionId)&&c.members.includes(t.dataset.user)));
     view.chatSettingsOpen=false; view.chatId=null; saveState(); render();
   }
+  if (action==="remove-friend") {
+    removeFriendPair(sessionId, t.dataset.user);
+    render();
+    saveState();
+  }
   if (action==="delete-self") {
     const chat=state.chats.find(c=>c.id===t.dataset.chat);
     const msg=chat?.messages.find(m=>m.id===t.dataset.message);
@@ -1180,15 +1288,21 @@ app.addEventListener("click", e => {
     const name=view.newFolderName.trim(); if (!name) return;
     if (folderNames().some(f=>f.toLowerCase()===name.toLowerCase())) { alert("มี Folder นี้แล้ว"); return; }
     state.customFolders=unique([...(state.customFolders||[]),name]);
-    state.folderSettings[name]={notify:true,bump:true,badge:true,highlight:true};
-    view.newFolderName=""; view.folder=name; saveState(); render();
+    state.folderSettings[name]={notify:true,bump:true,badge:true,highlight:true,order:rawFolderNames().length,keywords:""};
+    view.newFolderName=""; view.folder=name; view.folderSettingTarget=name; saveState(); render();
   }
   if (action==="delete-folder") {
     const f=t.dataset.folder;
     state.customFolders=(state.customFolders||[]).filter(x=>x!==f);
     delete state.folderSettings[f];
     state.chats.forEach(c=>{ c.tags=c.tags.filter(x=>x!==f); if(!c.tags.length)c.tags=["Main"]; });
-    if (view.folder===f) view.folder="Main"; saveState(); render();
+    if (view.folder===f) view.folder="Main";
+    if (view.folderSettingTarget===f) view.folderSettingTarget="Main";
+    saveState(); render();
+  }
+  if (action==="folder-setting-target-button") {
+    view.folderSettingTarget=t.dataset.folder;
+    render();
   }
   if (action==="create-group") {
     const name=view.groupDraft.trim(); if (!name) return;

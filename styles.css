@@ -29,7 +29,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -128,7 +129,8 @@ button {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -136,6 +138,13 @@ select {
   color: var(--ink);
   background: var(--white);
   outline: none;
+}
+
+textarea {
+  min-height: 96px;
+  border-radius: 8px;
+  resize: vertical;
+  line-height: 1.45;
 }
 
 .global-search {
@@ -170,7 +179,8 @@ select {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--green);
   box-shadow: 0 0 0 3px rgba(6, 199, 85, 0.14);
 }
@@ -556,10 +566,38 @@ select:focus {
   overflow: auto;
 }
 
+.chat-swipe {
+  display: grid;
+  grid-template-columns: auto minmax(100%, 100%) auto;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  border-bottom: 1px solid #eef2ef;
+  scrollbar-width: none;
+}
+
+.chat-swipe::-webkit-scrollbar {
+  display: none;
+}
+
+.swipe-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  background: var(--soft);
+  scroll-snap-align: start;
+}
+
+.swipe-actions.right {
+  scroll-snap-align: end;
+}
+
 .chat-row {
   border-bottom: 1px solid #eef2ef;
   border-radius: 0;
   min-height: 74px;
+  scroll-snap-align: center;
 }
 
 .bulk-bar {
@@ -788,7 +826,7 @@ select:focus {
 }
 
 .composer {
-  padding: 12px;
+  padding: 10px 12px max(12px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
   background: var(--white);
 }
@@ -811,9 +849,21 @@ select:focus {
 
 .composer-row {
   display: grid;
-  grid-template-columns: 38px 38px minmax(0, 1fr) 38px 38px 42px;
-  gap: 6px;
-  align-items: end;
+  grid-template-columns: 40px 40px minmax(0, 1fr) 40px 44px;
+  gap: 8px;
+  align-items: center;
+}
+
+.composer-row .icon-btn,
+.composer-row .send-btn {
+  width: 40px;
+  min-height: 40px;
+  border-radius: 999px;
+}
+
+.composer-row input[name="message"] {
+  min-height: 42px;
+  padding-inline: 14px;
 }
 
 .composer input[type="file"] {
@@ -1239,6 +1289,33 @@ select:focus {
   align-items: center;
   padding: 8px 0;
   border-top: 1px solid #eef2ef;
+}
+
+.friend-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid #eef2ef;
+}
+
+.folder-manage-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  color: inherit;
+  background: transparent;
+  border-top: 1px solid #eef2ef;
+  text-align: left;
+}
+
+.folder-manage-row.active span:first-child {
+  color: var(--green);
+  font-weight: 850;
 }
 
 .switch-row {
