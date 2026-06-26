@@ -103,6 +103,10 @@ let view = {
   chatSearch: "",
   folderSettingTarget: "Main",
   _authUser: "", _authPass: "",
+  openSwipeChatId: null,
+  openSwipeDir: null,
+  editingFolder: null,
+  showNewFolderInput: false,
 };
 
 let qrStream = null, qrScanTimer = null;
@@ -645,6 +649,7 @@ ${renderChatSettings(selected)}`;
 
 function renderRail(user) {
   const counts = folderCounts();
+  const showFolderList = view.screen === "list";
   return `
 <aside class="rail">
   <div class="topbar">
@@ -666,6 +671,7 @@ function renderRail(user) {
       <button type="submit" class="search-submit">${ui("ค้นหา","Search")}</button>
     </form>
   </div>
+  ${showFolderList ? `
   <nav class="folder-list">
     ${folderNames().map(f => {
       const s=ensureFolderSetting(f), cnt=counts[f];
@@ -677,6 +683,7 @@ function renderRail(user) {
     }).join("")}
     <button class="folder-btn folder-add" data-action="detail-tab" data-tab="newFolder"><i data-lucide="folder-plus"></i><span>สร้าง</span></button>
   </nav>
+  ` : ""}
 </aside>`;
 }
 
@@ -738,12 +745,24 @@ function renderChatRow(chat) {
     chat.tags.includes("Advertising")?`<span class="label ad">Advertising</span>`:"",
     chat.type==="group"?`<span class="label">Group</span>`:"",
   ].join("");
-  return `<div class="chat-swipe">
+
+  const isOpen = view.openSwipeChatId === chat.id;
+  const openClass = isOpen ? (view.openSwipeDir === "left" ? "open-left" : "open-right") : "";
+  const isPinned = chat.pinnedFor?.includes(user.id);
+  const isMuted = chat.mutedFor?.includes(user.id);
+
+  return `<div class="chat-swipe" data-chat-id="${chat.id}">
   <div class="swipe-actions left">
-    <button class="mini" data-action="chat-quick" data-quick="pin" data-chat="${chat.id}">ปักหมุด</button>
-    <button class="mini" data-action="chat-quick" data-quick="read" data-chat="${chat.id}">อ่านแล้ว</button>
+    <button class="btn-pin" data-action="chat-quick" data-quick="pin" data-chat="${chat.id}">
+      <i data-lucide="${isPinned ? "pin-off" : "pin"}"></i>
+      <span>${isPinned ? "ถอนหมุด" : "ปักหมุด"}</span>
+    </button>
+    <button class="btn-read" data-action="chat-quick" data-quick="read" data-chat="${chat.id}">
+      <i data-lucide="check"></i>
+      <span>อ่านแล้ว</span>
+    </button>
   </div>
-  <button class="chat-row${view.chatId===chat.id?" active":""} ${highlight}" data-action="${view.manageMode?"toggle-chat-select":"select-chat"}" data-chat="${chat.id}">
+  <button class="chat-row${view.chatId===chat.id?" active":""} ${highlight} ${openClass}" data-action="${view.manageMode?"toggle-chat-select":"select-chat"}" data-chat="${chat.id}">
     ${view.manageMode?`<span class="check-dot${view.selectedChatIds.includes(chat.id)?" checked":""}"><i data-lucide="check"></i></span>`:""}
     ${avatarHtml(chatAvatar(chat),chatName(chat))}
     <span class="preview">
@@ -754,9 +773,18 @@ function renderChatRow(chat) {
     <span><time>${latest?formatTime(latest.createdAt):""}</time>${unread?`<span class="badge">${unread}</span>`:""}</span>
   </button>
   <div class="swipe-actions right">
-    <button class="mini" data-action="chat-quick" data-quick="mute" data-chat="${chat.id}">ปิดเสียง</button>
-    <button class="mini" data-action="chat-quick" data-quick="hide" data-chat="${chat.id}">ซ่อน</button>
-    <button class="mini danger" data-action="chat-quick" data-quick="delete" data-chat="${chat.id}">ลบ</button>
+    <button class="btn-mute" data-action="chat-quick" data-quick="mute" data-chat="${chat.id}">
+      <i data-lucide="${isMuted ? "bell" : "bell-off"}"></i>
+      <span>${isMuted ? "เปิดเสียง" : "ปิดเสียง"}</span>
+    </button>
+    <button class="btn-hide" data-action="chat-quick" data-quick="hide" data-chat="${chat.id}">
+      <i data-lucide="eye-off"></i>
+      <span>ซ่อน</span>
+    </button>
+    <button class="btn-delete" data-action="chat-quick" data-quick="delete" data-chat="${chat.id}">
+      <i data-lucide="trash-2"></i>
+      <span>ลบ</span>
+    </button>
   </div>
 </div>`;
 }
@@ -1005,34 +1033,87 @@ function settingsPanel() {
 }
 
 function folderSettingsPanel() {
-  if (!folderNames().includes(view.folderSettingTarget)) view.folderSettingTarget = folderNames()[0] || "Main";
-  const f = view.folderSettingTarget;
-  const s = ensureFolderSetting(f);
+  const folders = folderNames();
   return `<div class="stack">
   <div class="block">
-    <h3>เลือกโฟลเดอร์ที่จะตั้งค่า</h3>
-    <select data-action="folder-setting-target">${folderNames().map(name=>`<option value="${esc(name)}" ${name===f?"selected":""}>${esc(name)}</option>`).join("")}</select>
+    <div class="folders-header-row">
+      <h3>โฟลเดอร์ทั้งหมด</h3>
+      <button class="icon-btn mini-add-btn" data-action="toggle-folder-create-inline" title="สร้างโฟลเดอร์">
+        <i data-lucide="folder-plus"></i>
+      </button>
+    </div>
+    
+    ${view.showNewFolderInput ? `
+    <div class="inline folder-create-inline">
+      <input value="${esc(view.newFolderName || "")}" data-action="new-folder-name" placeholder="ชื่อ Folder" autofocus />
+      <button class="primary" data-action="create-folder"><i data-lucide="check"></i></button>
+    </div>
+    ` : ""}
+
+    <div class="folder-sort-list" id="folder-sort-container">
+      ${folders.map(name => {
+        return `
+        <div class="folder-sort-item" data-folder="${esc(name)}">
+          <div class="folder-sort-handle">
+            <i data-lucide="grip-vertical"></i>
+            <span class="folder-sort-name">${esc(name)}</span>
+          </div>
+          <div class="folder-sort-actions">
+            <button class="icon-btn mini-settings-btn" data-action="edit-folder-settings" data-folder="${esc(name)}">
+              <i data-lucide="settings"></i>
+            </button>
+          </div>
+        </div>
+        `;
+      }).join("")}
+    </div>
   </div>
-  <div class="block">
-    <h3>${esc(f)}</h3>
-    <label class="field">ลำดับโฟลเดอร์<input type="number" min="1" value="${Number(s.order||1)}" data-action="folder-order" data-folder="${esc(f)}" /></label>
-    <label class="switch-row"><span>แจ้งเตือนโฟลเดอร์นี้</span><input type="checkbox" ${s.notify?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="notify" /></label>
-    <label class="switch-row"><span>ดันแชทขึ้นบนเมื่อมีข้อความใหม่</span><input type="checkbox" ${s.bump?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="bump" /></label>
-    <label class="switch-row"><span>แสดง Badge จำนวนข้อความ</span><input type="checkbox" ${s.badge?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="badge" /></label>
-    <label class="switch-row"><span>Highlight ข้อความใหม่</span><input type="checkbox" ${s.highlight?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="highlight" /></label>
-    <label class="field">Detect keywords เพื่อเข้าโฟลเดอร์นี้อัตโนมัติ<textarea data-action="folder-keywords" data-folder="${esc(f)}" placeholder="เช่น homework, งาน, นัด">${esc(s.keywords||"")}</textarea></label>
-    <p class="hint">คั่นคำด้วย comma หรือขึ้นบรรทัดใหม่ เช่น Important และ Advertising</p>
-    ${DEFAULT_FOLDERS.includes(f) ? `<span class="label">Default folder</span>` : `<button class="ghost danger" data-action="delete-folder" data-folder="${esc(f)}"><i data-lucide="trash-2"></i>ลบโฟลเดอร์นี้</button>`}
-  </div>
-  <div class="block">
-    <h3>สร้างโฟลเดอร์เพิ่ม</h3>
-    <div class="inline"><input value="${esc(view.newFolderName)}" data-action="new-folder-name" placeholder="ชื่อ Folder" /><button class="primary" data-action="create-folder"><i data-lucide="folder-plus"></i>สร้าง</button></div>
-  </div>
-  <div class="block">
-    <h3>โฟลเดอร์ทั้งหมด</h3>
-    ${folderNames().map(name=>`<button class="folder-manage-row${name===f?" active":""}" data-action="folder-setting-target-button" data-folder="${esc(name)}"><span>${esc(name)}</span><span class="small">ลำดับ ${Number(ensureFolderSetting(name).order||1)}</span></button>`).join("")}
-  </div>
+  
+  ${view.editingFolder ? renderFolderEditModal(view.editingFolder) : ""}
 </div>`;
+}
+
+function renderFolderEditModal(f) {
+  const s = ensureFolderSetting(f);
+  return `
+  <div class="modal-backdrop show" id="folder-edit-modal">
+    <div class="modal folder-edit-modal">
+      <div class="section-head modal-head">
+        <strong>ตั้งค่าโฟลเดอร์: ${esc(f)}</strong>
+        <button class="icon-btn" data-action="close-folder-edit"><i data-lucide="x"></i></button>
+      </div>
+      <div class="stack modal-body" style="text-align: left; margin-top: 14px; gap: 8px;">
+        <label class="switch-row">
+          <span>แจ้งเตือนโฟลเดอร์นี้</span>
+          <input type="checkbox" ${s.notify?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="notify" />
+        </label>
+        <label class="switch-row">
+          <span>ดันแชทขึ้นบนเมื่อมีข้อความใหม่</span>
+          <input type="checkbox" ${s.bump?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="bump" />
+        </label>
+        <label class="switch-row">
+          <span>แสดง Badge จำนวนข้อความ</span>
+          <input type="checkbox" ${s.badge?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="badge" />
+        </label>
+        <label class="switch-row">
+          <span>Highlight ข้อความใหม่</span>
+          <input type="checkbox" ${s.highlight?"checked":""} data-action="folder-setting" data-folder="${esc(f)}" data-key="highlight" />
+        </label>
+        <label class="field" style="display: flex; flex-direction: column; gap: 6px; margin-top: 10px;">
+          <span>Detect keywords เพื่อเข้าโฟลเดอร์นี้อัตโนมัติ</span>
+          <textarea data-action="folder-keywords" data-folder="${esc(f)}" placeholder="เช่น homework, งาน, นัด" style="min-height: 80px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; resize: vertical;">${esc(s.keywords||"")}</textarea>
+        </label>
+        <p class="hint" style="margin-top: -4px;">คั่นคำด้วย comma หรือขึ้นบรรทัดใหม่ เช่น Important และ Advertising</p>
+        
+        <div class="modal-actions" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
+          ${DEFAULT_FOLDERS.includes(f) 
+            ? `<span class="label">Default folder</span>` 
+            : `<button class="ghost danger" data-action="delete-folder" data-folder="${esc(f)}"><i data-lucide="trash-2"></i>ลบโฟลเดอร์นี้</button>`}
+          <button class="primary" data-action="close-folder-edit" style="min-width: 80px;">ตกลง</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
 }
 
 function createFolderPanel() {
@@ -1198,6 +1279,11 @@ app.addEventListener("change", e => {
 });
 
 app.addEventListener("click", e => {
+  if (window.isDraggingEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   const t = e.target.closest("[data-action]"); if (!t) return;
   const action = t.dataset.action;
 
@@ -1247,11 +1333,15 @@ app.addEventListener("click", e => {
       }
       if (type==="hide"||type==="delete") chat.hiddenFor=unique([...(chat.hiddenFor||[]),sessionId]);
       if (type==="read") { chat.unread[sessionId]=0; chat.importantUnread[sessionId]=0; chat.messages.forEach(m=>{if(m.senderId!==sessionId&&!m.readAt)m.readAt=Date.now();}); }
+      view.openSwipeChatId = null;
+      view.openSwipeDir = null;
       saveState(); render();
     }
   }
   if (action==="select-chat") {
     view.chatId=t.dataset.chat; view.screen="chat";
+    view.openSwipeChatId = null;
+    view.openSwipeDir = null;
     const chat=state.chats.find(c=>c.id===view.chatId);
     if (chat) { chat.unread[sessionId]=0; chat.importantUnread[sessionId]=0; chat.messages.forEach(m=>{if(m.senderId!==sessionId&&!m.readAt)m.readAt=Date.now();}); saveState(); }
     render();
@@ -1334,7 +1424,9 @@ app.addEventListener("click", e => {
     if (folderNames().some(f=>f.toLowerCase()===name.toLowerCase())) { alert("มี Folder นี้แล้ว"); return; }
     state.customFolders=unique([...(state.customFolders||[]),name]);
     state.folderSettings[name]={notify:true,bump:true,badge:true,highlight:true,order:rawFolderNames().length,keywords:""};
-    view.newFolderName=""; view.folder=name; view.folderSettingTarget=name; saveState(); render();
+    view.newFolderName=""; view.folder=name; view.folderSettingTarget=name;
+    view.showNewFolderInput = false;
+    saveState(); render();
   }
   if (action==="delete-folder") {
     const f=t.dataset.folder;
@@ -1343,10 +1435,20 @@ app.addEventListener("click", e => {
     state.chats.forEach(c=>{ c.tags=c.tags.filter(x=>x!==f); if(!c.tags.length)c.tags=["Main"]; });
     if (view.folder===f) view.folder="Main";
     if (view.folderSettingTarget===f) view.folderSettingTarget="Main";
+    view.editingFolder = null;
     saveState(); render();
   }
-  if (action==="folder-setting-target-button") {
-    view.folderSettingTarget=t.dataset.folder;
+  if (action==="edit-folder-settings") {
+    view.editingFolder = t.dataset.folder;
+    render();
+  }
+  if (action==="close-folder-edit") {
+    view.editingFolder = null;
+    render();
+  }
+  if (action==="toggle-folder-create-inline") {
+    view.showNewFolderInput = !view.showNewFolderInput;
+    view.newFolderName = "";
     render();
   }
   if (action==="create-group") {
@@ -1396,6 +1498,274 @@ if ("BroadcastChannel" in window) {
     if (event.data?.type === "state-updated" && event.data.source !== TAB_ID) scheduleSharedSync();
   };
 }
+
+// --- Swipe-to-reveal click-and-drag logic ---
+let dragStart = null;
+let activeRow = null;
+let dragLimitLeft = 140; // width of left actions
+let dragLimitRight = 210; // width of right actions
+let dragThreshold = 5;
+let isDraggingRow = false;
+let currentTransformX = 0;
+
+function handleDragStart(e) {
+  if (view.manageMode) return;
+
+  // Clear existing open state if clicking outside the open row or its container
+  if (view.openSwipeChatId) {
+    const clickedSwipe = e.target.closest('.chat-swipe');
+    if (!clickedSwipe || clickedSwipe.dataset.chatId !== view.openSwipeChatId) {
+      view.openSwipeChatId = null;
+      view.openSwipeDir = null;
+      render();
+
+      window.isDraggingEvent = true;
+      setTimeout(() => {
+        window.isDraggingEvent = false;
+      }, 50);
+
+      dragStart = null;
+      activeRow = null;
+      return;
+    } else {
+      // Clicking on the same swiped open row's chat-row body
+      if (e.target.closest('.chat-row') && !e.target.closest('.swipe-actions')) {
+        view.openSwipeChatId = null;
+        view.openSwipeDir = null;
+        render();
+
+        window.isDraggingEvent = true;
+        setTimeout(() => {
+          window.isDraggingEvent = false;
+        }, 50);
+
+        dragStart = null;
+        activeRow = null;
+        return;
+      }
+    }
+  }
+
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+  const row = e.target.closest('.chat-row');
+  if (!row) return;
+
+  if (e.target.closest('.swipe-actions')) return;
+
+  const chatSwipe = row.closest('.chat-swipe');
+  if (!chatSwipe) return;
+
+  activeRow = row;
+  dragStart = { x: clientX, y: clientY };
+  isDraggingRow = false;
+
+  currentTransformX = 0;
+  if (row.classList.contains('open-left')) {
+    currentTransformX = dragLimitLeft;
+  } else if (row.classList.contains('open-right')) {
+    currentTransformX = -dragLimitRight;
+  }
+}
+
+function handleDragMove(e) {
+  if (!dragStart || !activeRow) return;
+
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+  const dx = clientX - dragStart.x;
+  const dy = clientY - dragStart.y;
+
+  if (!isDraggingRow) {
+    if (Math.abs(dx) > dragThreshold && Math.abs(dx) > Math.abs(dy)) {
+      isDraggingRow = true;
+      window.isDraggingEvent = true;
+      activeRow.classList.add('dragging');
+    }
+  }
+
+  if (isDraggingRow) {
+    let targetX = currentTransformX + dx;
+
+    if (targetX > dragLimitLeft) {
+      targetX = dragLimitLeft + (targetX - dragLimitLeft) * 0.25;
+    } else if (targetX < -dragLimitRight) {
+      targetX = -dragLimitRight + (targetX + dragLimitRight) * 0.25;
+    }
+
+    activeRow.style.transform = `translateX(${targetX}px)`;
+
+    if (e.cancelable) e.preventDefault();
+  }
+}
+
+function handleDragEnd(e) {
+  if (!dragStart || !activeRow) {
+    dragStart = null;
+    activeRow = null;
+    return;
+  }
+
+  const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+  const dx = clientX - dragStart.x;
+  const finalX = currentTransformX + dx;
+  const chatSwipe = activeRow.closest('.chat-swipe');
+  const chatId = chatSwipe ? chatSwipe.dataset.chatId : null;
+
+  activeRow.classList.remove('dragging');
+
+  if (isDraggingRow) {
+    let targetState = 'closed';
+
+    if (finalX > 70) {
+      targetState = 'left';
+    } else if (finalX < -70) {
+      targetState = 'right';
+    }
+
+    if (targetState === 'left') {
+      view.openSwipeChatId = chatId;
+      view.openSwipeDir = 'left';
+    } else if (targetState === 'right') {
+      view.openSwipeChatId = chatId;
+      view.openSwipeDir = 'right';
+    } else {
+      view.openSwipeChatId = null;
+      view.openSwipeDir = null;
+    }
+
+    render();
+
+    setTimeout(() => {
+      window.isDraggingEvent = false;
+    }, 50);
+  }
+
+  dragStart = null;
+  activeRow = null;
+}
+
+document.addEventListener('mousedown', handleDragStart, { passive: false });
+document.addEventListener('mousemove', handleDragMove, { passive: false });
+document.addEventListener('mouseup', handleDragEnd);
+
+document.addEventListener('touchstart', handleDragStart, { passive: false });
+document.addEventListener('touchmove', handleDragMove, { passive: false });
+document.addEventListener('touchend', handleDragEnd);
+document.addEventListener('touchcancel', handleDragEnd);
+
+// --- Folder Reordering Drag & Drop ---
+let activeSortItem = null;
+let sortContainer = null;
+let sortStartY = 0;
+let sortStartClientY = 0;
+
+function handleSortStart(e) {
+  if (e.target.closest('.mini-settings-btn') || e.target.closest('button')) return;
+
+  const item = e.target.closest('.folder-sort-item');
+  if (!item) return;
+
+  const container = item.closest('#folder-sort-container');
+  if (!container) return;
+
+  activeSortItem = item;
+  sortContainer = container;
+  sortStartY = item.offsetTop;
+  sortStartClientY = e.clientY;
+
+  activeSortItem.classList.add('sorting');
+  
+  if (e.pointerId !== undefined) {
+    activeSortItem.setPointerCapture(e.pointerId);
+  }
+}
+
+function handleSortMove(e) {
+  if (!activeSortItem || !sortContainer) return;
+
+  const clientY = e.clientY;
+  const dy = clientY - sortStartClientY;
+
+  activeSortItem.style.transform = `translateY(${dy}px)`;
+
+  const prev = activeSortItem.previousElementSibling;
+  if (prev && prev.classList.contains('folder-sort-item')) {
+    const prevRect = prev.getBoundingClientRect();
+    const prevMiddle = prevRect.top + prevRect.height / 2;
+    if (clientY < prevMiddle) {
+      sortContainer.insertBefore(activeSortItem, prev);
+      sortStartClientY -= prevRect.height;
+      activeSortItem.style.transform = `translateY(${clientY - sortStartClientY}px)`;
+      return;
+    }
+  }
+
+  const next = activeSortItem.nextElementSibling;
+  if (next && next.classList.contains('folder-sort-item')) {
+    const nextRect = next.getBoundingClientRect();
+    const nextMiddle = nextRect.top + nextRect.height / 2;
+    if (clientY > nextMiddle) {
+      sortContainer.insertBefore(activeSortItem, next.nextSibling);
+      sortStartClientY += nextRect.height;
+      activeSortItem.style.transform = `translateY(${clientY - sortStartClientY}px)`;
+      return;
+    }
+  }
+}
+
+function handleSortEnd(e) {
+  if (!activeSortItem) return;
+
+  if (e.pointerId !== undefined) {
+    try {
+      activeSortItem.releasePointerCapture(e.pointerId);
+    } catch (err) {}
+  }
+
+  activeSortItem.classList.remove('sorting');
+  activeSortItem.style.transform = '';
+
+  const finalItems = [...sortContainer.querySelectorAll('.folder-sort-item')];
+  const newOrder = finalItems.map(el => el.dataset.folder);
+
+  newOrder.forEach((name, index) => {
+    ensureFolderSetting(name).order = index + 1;
+  });
+
+  saveState();
+  render();
+
+  activeSortItem = null;
+  sortContainer = null;
+}
+
+document.addEventListener('pointerdown', e => {
+  const handle = e.target.closest('.folder-sort-handle') || e.target.closest('.folder-sort-item');
+  if (handle && e.target.closest('#folder-sort-container')) {
+    handleSortStart(e);
+  }
+});
+
+document.addEventListener('pointermove', e => {
+  if (activeSortItem) {
+    handleSortMove(e);
+  }
+});
+
+document.addEventListener('pointerup', e => {
+  if (activeSortItem) {
+    handleSortEnd(e);
+  }
+});
+
+document.addEventListener('dragstart', e => {
+  if (e.target.closest('.folder-sort-item')) {
+    e.preventDefault();
+  }
+});
 
 window.addEventListener("storage", (event) => {
   if (event.key === `${STORAGE_KEY}:pulse` && event.newValue?.startsWith(`${TAB_ID}:`)) return;
