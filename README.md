@@ -45,7 +45,9 @@ Deploy on Railway:
 3. Generate a public domain in Railway Networking.
 4. Open that Railway URL on every phone. All phones will use the same server state and realtime sync.
 
-For durable production data, attach a Railway Volume and set `DATA_DIR` to the mounted path, for example `/data`.
+For durable production data, attach a Railway Volume. TaiTalk will automatically use `/data` when that mount exists, or you can set `DATA_DIR` to the mounted path yourself.
+
+Accounts are stored on the server through the auth API, so users can log in again with the same username and password after signing up once. Without a Railway Volume, Railway can still lose file data when the service is redeployed or rebuilt.
 
 You can still open `index.html` directly for offline UI testing, but cross-device sync only works through the Node server.
 

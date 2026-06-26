@@ -57,7 +57,7 @@ function storedSession() {
 
 function setStoredSession(id) {
   sessionStorage.setItem(SESSION_KEY, id);
-  localStorage.removeItem(SESSION_KEY);
+  localStorage.setItem(SESSION_KEY, id);
 }
 
 function clearStoredSession() {
@@ -420,6 +420,29 @@ async function pushRemoteState() {
   }
 }
 
+async function remoteAuth(path, payload) {
+  if (!canUseRemoteSync()) return null;
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, clientId: TAB_ID }),
+    });
+  } catch {
+    remoteAvailable = false;
+    return null;
+  }
+  remoteAvailable = true;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "ไม่สามารถเชื่อมต่อบัญชีได้");
+  remoteStateVersion = data.version || remoteStateVersion;
+  state = migrateStateIds(data.state || state);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  broadcastStateChange();
+  return data.userId;
+}
+
 function startRemoteRealtime() {
   if (!canUseRemoteSync()) return;
   if ("EventSource" in window) {
@@ -441,13 +464,24 @@ function startRemoteRealtime() {
 }
 
 // ─── Auth ─────────────────────────────────────────────────────
-function handleAuth(form, mode) {
+async function handleAuth(form, mode) {
   const data = new FormData(form);
   const username = String(data.get("username")||"").trim();
   const password = String(data.get("password")||"");
   if (!username) { showAuthError("กรุณากรอก Username"); return; }
   if (!password) { showAuthError("กรุณากรอก Password"); return; }
   if (mode === "login") {
+    try {
+      const remoteUserId = await remoteAuth("/api/auth/login", { username, password });
+      if (remoteUserId) {
+        sessionId = remoteUserId;
+        setStoredSession(sessionId);
+        view._authUser=""; view._authPass="";
+        view.screen="home"; render(); return;
+      }
+    } catch (error) {
+      if (remoteAvailable) { showAuthError(error.message); return; }
+    }
     const user = state.users.find(u => u.username.toLowerCase()===username.toLowerCase() && u.password===password);
     if (!user) { showAuthError("Username หรือ Password ไม่ถูกต้อง"); return; }
     sessionId = user.id;
@@ -460,6 +494,17 @@ function handleAuth(form, mode) {
   const confirm = String(data.get("confirm")||"");
   if (password!==confirm) { showAuthError("Password ไม่ตรงกัน"); return; }
   if (state.users.some(u => u.username.toLowerCase()===username.toLowerCase())) { showAuthError("Username นี้ถูกใช้แล้ว"); return; }
+  try {
+    const remoteUserId = await remoteAuth("/api/auth/register", { username, password });
+    if (remoteUserId) {
+      sessionId = remoteUserId;
+      setStoredSession(sessionId);
+      view._authUser=""; view._authPass="";
+      view.screen="home"; render(); return;
+    }
+  } catch (error) {
+    if (remoteAvailable) { showAuthError(error.message); return; }
+  }
   const newId = handleFromUsername(username);
   const user = { id:newId, username:username.toLowerCase(), displayName:username, password, avatar:"", blocked:[] };
   state.users.push(user);

@@ -5,7 +5,7 @@ import { extname, join, resolve } from "node:path";
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = resolve(".");
-const DATA_DIR = process.env.DATA_DIR || join(ROOT, "data");
+const DATA_DIR = process.env.DATA_DIR || (existsSync("/data") ? "/data" : join(ROOT, "data"));
 const DATA_FILE = process.env.DATA_FILE || join(DATA_DIR, "taitalk-state.json");
 const MAX_BODY = 30 * 1024 * 1024;
 
@@ -58,6 +58,10 @@ async function saveDb() {
   await writeFile(DATA_FILE, JSON.stringify(db, null, 2));
 }
 
+function handleFromUsername(username) {
+  return `@${String(username || "user").trim().toLowerCase().replace(/^@+/, "")}`;
+}
+
 function unique(values) {
   return [...new Set((values || []).filter(Boolean))];
 }
@@ -84,6 +88,15 @@ function mergeUsers(current, incoming) {
     map.set(user.id, { ...prev, ...user, blocked: unique([...(prev.blocked || []), ...(user.blocked || [])]) });
   }
   return [...map.values()];
+}
+
+function publicAuthState() {
+  return { version: db.version, state: db.state };
+}
+
+function findUserByUsername(username) {
+  const q = String(username || "").trim().toLowerCase().replace(/^@+/, "");
+  return db.state.users.find(user => String(user.username || "").toLowerCase() === q || String(user.id || "").toLowerCase().replace(/^@+/, "") === q);
 }
 
 function pairKey(pair) {
@@ -225,6 +238,48 @@ createServer(async (req, res) => {
       await saveDb();
       notifyClients(body.clientId || "");
       sendJson(res, 200, db);
+    } catch (error) {
+      sendJson(res, 400, { error: error.message || "Bad request" });
+    }
+    return;
+  }
+  if (url.pathname === "/api/auth/login" && req.method === "POST") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const user = findUserByUsername(body.username);
+      if (!user || user.password !== String(body.password || "")) {
+        sendJson(res, 401, { error: "Username หรือ Password ไม่ถูกต้อง" });
+        return;
+      }
+      sendJson(res, 200, { ...publicAuthState(), userId: user.id });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message || "Bad request" });
+    }
+    return;
+  }
+  if (url.pathname === "/api/auth/register" && req.method === "POST") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const username = String(body.username || "").trim().toLowerCase();
+      const password = String(body.password || "");
+      if (!/^[a-zA-Z0-9._]{3,}$/.test(username)) {
+        sendJson(res, 400, { error: "Username ใช้ a-z 0-9 . _ อย่างน้อย 3 ตัว" });
+        return;
+      }
+      if (password.length < 4) {
+        sendJson(res, 400, { error: "Password ต้องมีอย่างน้อย 4 ตัวอักษร" });
+        return;
+      }
+      if (findUserByUsername(username)) {
+        sendJson(res, 409, { error: "Username นี้ถูกใช้แล้ว" });
+        return;
+      }
+      const user = { id: handleFromUsername(username), username, displayName: username, password, avatar: "", blocked: [] };
+      db.state.users.push(user);
+      db.version += 1;
+      await saveDb();
+      notifyClients(body.clientId || "");
+      sendJson(res, 200, { ...publicAuthState(), userId: user.id });
     } catch (error) {
       sendJson(res, 400, { error: error.message || "Bad request" });
     }
