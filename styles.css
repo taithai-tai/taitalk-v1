@@ -242,6 +242,7 @@ textarea:focus {
   height: 100dvh;
   max-height: 920px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr auto;
   background: var(--white);
   border-left: 1px solid var(--line);
@@ -760,11 +761,14 @@ textarea:focus {
 }
 
 .chat {
+  width: 100%;
   min-width: 0;
   min-height: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr auto;
   background: #eef5f0;
+  overflow-x: hidden;
 }
 
 .chat-title {
@@ -778,6 +782,7 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
 }
 
 .chat-actions .mini {
@@ -933,21 +938,24 @@ textarea:focus {
 
 .composer-row {
   display: grid;
-  grid-template-columns: 40px 40px minmax(0, 1fr) 40px 44px;
-  gap: 8px;
+  grid-template-columns: 38px 38px minmax(0, 1fr) 38px 42px;
+  gap: 6px;
   align-items: center;
 }
 
 .composer-row .icon-btn,
 .composer-row .send-btn {
-  width: 40px;
-  min-height: 40px;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  flex: 0 0 auto;
   border-radius: 999px;
 }
 
 .composer-row input[name="message"] {
-  min-height: 42px;
-  padding-inline: 14px;
+  min-width: 0;
+  min-height: 40px;
+  padding-inline: 12px;
 }
 
 .ai-compose-bar {
@@ -1528,7 +1536,7 @@ textarea:focus {
   }
 
   .chat-actions {
-    gap: 6px;
+    gap: 4px;
   }
 
   .chat-actions .icon-btn,
@@ -1536,8 +1544,38 @@ textarea:focus {
     width: 36px;
   }
 
+  .chat-actions .mini {
+    padding-inline: 7px;
+  }
+
+  .chat-actions .mini[data-action="switch-side"] {
+    display: none;
+  }
+
   .message {
     max-width: 92%;
+  }
+
+  .composer {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .composer-row {
+    grid-template-columns: 36px 36px minmax(0, 1fr) 36px 40px;
+    gap: 5px;
+  }
+
+  .composer-row .icon-btn,
+  .composer-row .send-btn {
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .composer-row input[name="message"] {
+    min-height: 38px;
+    padding-inline: 10px;
   }
 }
 

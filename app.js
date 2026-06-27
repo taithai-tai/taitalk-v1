@@ -794,10 +794,13 @@ function renderBottomNav() {
   const items = IS_V2
     ? [["home","","home",ui("หน้าแรก","Home")],["list","chat","message-circle",ui("แชท","Chat")],["tools","aiSearch","sparkles","AI"],["tools","library","folder-open","Files"],["tools","settings","settings",ui("ตั้งค่า","Settings")]]
     : [["home","","home",ui("หน้าแรก","Home")],["list","chat","message-circle",ui("แชท","Chat")],["voom","","play-square","VOOM"],["today","","newspaper","Today"],["wallet","","wallet","Wallet"]];
-  return `<nav class="bottom-nav">${items.map(([sc,tab,icon,label])=>`
-    <button class="${view.screen===sc?"active":""}" data-action="bottom-nav" data-screen="${sc}" data-tab="${tab}">
+  return `<nav class="bottom-nav">${items.map(([sc,tab,icon,label])=> {
+    const isActive = view.screen === sc && (!tab || view.detailTab === tab);
+    return `
+    <button class="${isActive?"active":""}" data-action="bottom-nav" data-screen="${sc}" data-tab="${tab}">
       <i data-lucide="${icon}"></i><span>${label}</span>
-    </button>`).join("")}</nav>`;
+    </button>`;
+  }).join("")}</nav>`;
 }
 
 function renderHome() {
