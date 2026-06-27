@@ -214,7 +214,7 @@ function notifyClients(clientId) {
 }
 
 function serveFile(res, pathname) {
-  const clean = pathname === "/" ? "/index.html" : decodeURIComponent(pathname);
+  const clean = pathname === "/" ? "/index.html" : pathname === "/v2" ? "/v2.html" : decodeURIComponent(pathname);
   const file = resolve(join(ROOT, clean));
   if (!file.startsWith(ROOT) || !existsSync(file)) {
     sendJson(res, 404, { error: "Not found" });
