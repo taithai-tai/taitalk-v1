@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync, createReadStream } from "node:fs";
+import { existsSync, createReadStream, readFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 
 const PORT = Number(process.env.PORT || 3000);
@@ -8,6 +8,9 @@ const ROOT = resolve(".");
 const DATA_DIR = process.env.DATA_DIR || (existsSync("/data") ? "/data" : join(ROOT, "data"));
 const DATA_FILE = process.env.DATA_FILE || join(DATA_DIR, "taitalk-state.json");
 const MAX_BODY = 30 * 1024 * 1024;
+loadEnv();
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-oss-120b:free";
 
 const DEFAULT_FOLDERS = ["Main","Important","Advertising","Request","Group","Work","Study","Friends","Family"];
 
@@ -36,6 +39,8 @@ function defaultState() {
     friendships: [],
     customFolders: [],
     deletedFolders: [],
+    userSettings: {},
+    aiMemory: {},
     appSettings: { fontSize: "normal", theme: "light", language: "th" },
     folderSettings: Object.fromEntries(DEFAULT_FOLDERS.map(f => [f, {
       notify: f !== "Advertising", bump: f !== "Advertising", badge: true, highlight: true
@@ -76,10 +81,31 @@ function normalizeState(state) {
     friendships: state.friendships || [],
     customFolders: state.customFolders || [],
     deletedFolders: state.deletedFolders || [],
+    userSettings: state.userSettings || {},
+    aiMemory: state.aiMemory || {},
     appSettings: { ...base.appSettings, ...(state.appSettings || {}) },
     folderSettings: { ...base.folderSettings, ...(state.folderSettings || {}) },
     chats: state.chats || [],
   };
+}
+
+function loadEnv() {
+  if (!existsSync(join(ROOT, ".env"))) return;
+  try {
+    const lines = awaitReadEnv();
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+      const [key, ...rest] = trimmed.split("=");
+      if (!process.env[key]) process.env[key] = rest.join("=").trim().replace(/^['"]|['"]$/g, "");
+    }
+  } catch {}
+}
+
+function awaitReadEnv() {
+  return existsSync(join(ROOT, ".env"))
+    ? String(readFileSync(join(ROOT, ".env"), "utf8")).split(/\r?\n/)
+    : [];
 }
 
 function mergeUsers(current, incoming) {
@@ -177,6 +203,8 @@ function mergeState(currentState, incomingState) {
     friendships: [...friendshipMap.values()],
     customFolders,
     deletedFolders,
+    userSettings: { ...(current.userSettings || {}), ...(incoming.userSettings || {}) },
+    aiMemory: { ...(current.aiMemory || {}), ...(incoming.aiMemory || {}) },
     appSettings: { ...current.appSettings, ...incoming.appSettings },
     folderSettings,
     chats: mergeChats(current.chats, incoming.chats),
@@ -211,6 +239,40 @@ function readBody(req) {
 function notifyClients(clientId) {
   const event = JSON.stringify({ version: db.version, clientId, at: Date.now() });
   for (const res of clients) res.write(`data: ${event}\n\n`);
+}
+
+function mockAiResult(task, input = {}) {
+  const text = String(input.text || input.prompt || "");
+  if (task === "rewrite") return { mode: "mock", text: text ? `${text.trim()} ครับ/ค่ะ` : "ขอบคุณมากครับ/ค่ะ" };
+  if (task === "translate") return { mode: "mock", text: `[แปล mock] ${text}` };
+  if (task === "summary") return { mode: "mock", text: "• Important: มีข้อความที่ควรติดตาม\n• Deadline: ตรวจคำว่า วันนี้/พรุ่งนี้/ส่งงาน\n• File: รวมไฟล์จากแชทนี้\n• To-do: ตอบกลับหรือสร้าง reminder หากจำเป็น" };
+  if (task === "search") return { mode: "mock", text: "ผลลัพธ์ mock: พบข้อมูลที่เกี่ยวข้องจากชื่อแชท ข้อความล่าสุด และชื่อไฟล์" };
+  return { mode: "mock", text: "AI mock พร้อมใช้งาน" };
+}
+
+async function runAi(task, input) {
+  if (!OPENROUTER_API_KEY) return mockAiResult(task, input);
+  const prompt = [
+    "You are TaiTalk AI. Reply concisely in Thai unless asked otherwise.",
+    `Task: ${task}`,
+    `Input: ${JSON.stringify(input || {})}`,
+  ].join("\n");
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      "HTTP-Referer": "https://taitalk.local",
+      "X-Title": "TaiTalk V2",
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!response.ok) return mockAiResult(task, input);
+  const data = await response.json();
+  return { mode: "api", text: data.choices?.[0]?.message?.content || mockAiResult(task, input).text };
 }
 
 function serveFile(res, pathname) {
@@ -292,6 +354,15 @@ createServer(async (req, res) => {
       sendJson(res, 200, { ...publicAuthState(), userId: user.id });
     } catch (error) {
       sendJson(res, 400, { error: error.message || "Bad request" });
+    }
+    return;
+  }
+  if (url.pathname === "/api/ai" && req.method === "POST") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      sendJson(res, 200, await runAi(body.task || "general", body.input || {}));
+    } catch (error) {
+      sendJson(res, 200, mockAiResult("error", { text: error.message || "AI unavailable" }));
     }
     return;
   }

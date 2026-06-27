@@ -749,6 +749,16 @@ textarea:focus {
   background: var(--ad);
 }
 
+.label.private {
+  color: #fff;
+  background: #111827;
+}
+
+.ai-reason {
+  display: block;
+  margin-top: 4px;
+}
+
 .chat {
   min-width: 0;
   min-height: 0;
@@ -836,6 +846,33 @@ textarea:focus {
 .message-menu {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
+}
+
+.translation {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.reminder-card,
+.ai-summary-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #bfe8ce;
+  border-radius: 8px;
+  background: #f0fff5;
+}
+
+.ai-summary-card pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font: inherit;
+  color: var(--ink);
 }
 
 .mini {
@@ -911,6 +948,25 @@ textarea:focus {
 .composer-row input[name="message"] {
   min-height: 42px;
   padding-inline: 14px;
+}
+
+.ai-compose-bar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-top: 8px;
+}
+
+.jump-latest {
+  position: sticky;
+  bottom: 8px;
+  display: block;
+  margin: 12px auto 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  color: var(--white);
+  background: var(--green);
+  font-weight: 800;
 }
 
 .composer input[type="file"] {
@@ -1047,6 +1103,20 @@ textarea:focus {
 
 .media-summary span {
   color: var(--muted);
+}
+
+.file-hub-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid #eef2ef;
+}
+
+.tutorial-step {
+  display: grid;
+  gap: 6px;
 }
 
 .photo-grid {
@@ -1189,6 +1259,10 @@ textarea:focus {
 }
 
 .profile-upload input {
+  display: none;
+}
+
+.ghost input[type="file"] {
   display: none;
 }
 

@@ -38,6 +38,27 @@ npm start
 
 Then open `http://localhost:3000`.
 
+## TaiTalk V2 prototype
+
+Open `http://localhost:3000/v2` for the V2 prototype. V2 keeps the familiar LINE-style flow, but adds account-specific settings and AI-assisted chat tools:
+
+- Per-account folders, theme, language, notification, AI, privacy, reminders, and pinned files
+- AI chat categorization with user overrides and per-chat AI privacy toggle
+- AI Search across chats, files, photos, and natural-language questions
+- File Hub for shared images, PDF, Word, Excel, PowerPoint, ZIP, video, and Canva links
+- AI chat summary, daily summary, writing assistant, and one-tap translation
+- Smart reminder cards from messages that mention deadlines or appointments
+- Priority notification center, onboarding tutorial, backup, and restore
+
+Optional OpenRouter AI setup:
+
+```sh
+OPENROUTER_API_KEY=your_key_here
+OPENROUTER_MODEL=openai/gpt-oss-120b:free
+```
+
+Create a `.env` file in the project root with those values, then restart the server. If `OPENROUTER_API_KEY` is missing or the API call fails, TaiTalk automatically uses mock AI responses so the prototype still works.
+
 Deploy on Railway:
 
 1. Create a Railway project from this GitHub repository.

@@ -7,6 +7,7 @@ const SESSION_KEY = "taitalk:v2:session";
 const SYNC_CHANNEL = "taitalk:v2:sync";
 const TAB_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const API_BASE = window.TAITALK_API_BASE || "";
+const IS_V2 = location.pathname.includes("/v2");
 const app = document.querySelector("#app");
 let didMigrateState = false;
 let syncChannel = null;
@@ -27,6 +28,8 @@ function defaultState() {
     friendships: [],
     customFolders: [],
     deletedFolders: [],
+    userSettings: {},
+    aiMemory: {},
     appSettings: { fontSize: "normal", theme: "light", language: "th" },
     folderSettings: Object.fromEntries(DEFAULT_FOLDERS.map(f => [f, {
       notify: f !== "Advertising", bump: f !== "Advertising", badge: true, highlight: true,
@@ -49,6 +52,8 @@ function loadState() {
       appSettings:    { ...base.appSettings,    ...(parsed.appSettings    || {}) },
       customFolders:  parsed.customFolders || [],
       deletedFolders: parsed.deletedFolders || [],
+      userSettings:   parsed.userSettings || {},
+      aiMemory:       parsed.aiMemory || {},
     });
   } catch { return defaultState(); }
 }
@@ -204,6 +209,53 @@ function chatFiles(chat) {
 function chatPhotos(chat) {
   return chatFiles(chat).filter(m => m.file.type?.startsWith("image/"));
 }
+function allFiles() {
+  return state.chats
+    .filter(c => c.members.includes(sessionId))
+    .flatMap(c => visibleMessages(c).filter(m => m.file).map(m => ({ chat: c, message: m, file: m.file })));
+}
+function fileTypeLabel(file) {
+  const name = file?.name || "";
+  const type = file?.type || "";
+  if (type.startsWith("image/")) return "รูปภาพ";
+  if (type.startsWith("video/")) return "วิดีโอ";
+  if (/canva|www\.canva/i.test(name)) return "Canva Link";
+  if (/\.pdf$/i.test(name)) return "PDF";
+  if (/\.pptx?$/i.test(name)) return "PowerPoint";
+  if (/\.docx?$/i.test(name)) return "Word";
+  if (/\.xlsx?$/i.test(name)) return "Excel";
+  if (/\.zip$/i.test(name)) return "ZIP";
+  return "File";
+}
+function chatAiDisabled(chat) { return !!userSettings().chatAiDisabled?.[chat.id]; }
+function aiCategoryForChat(chat) {
+  const settings = userSettings();
+  if (chatAiDisabled(chat)) return { category: "Private Chat", reason: "AI ถูกปิดสำหรับแชทนี้" };
+  if (settings.chatCategories?.[chat.id]) return { category: settings.chatCategories[chat.id], reason: settings.chatAiReasons?.[chat.id] || "ผู้ใช้แก้หมวดเอง AI mock จดจำไว้" };
+  const latest = latestMessage(chat);
+  const text = `${chatName(chat)} ${latest?.text || ""} ${latest?.file?.name || ""}`.toLowerCase();
+  if (AD_KEYWORDS.some(k => text.includes(k.toLowerCase()))) return { category: "Advertising", reason: "พบคำแนวโฆษณาหรือโปรโมชัน" };
+  if (IMPORTANT_KEYWORDS.some(k => text.includes(k.toLowerCase()))) return { category: "Important", reason: "พบคำสำคัญ เช่น deadline, วันนี้, ส่งงาน" };
+  if (/งาน|project|meeting|deadline|work|ประชุม/.test(text)) return { category: "Work", reason: "บริบทเกี่ยวกับงานหรือประชุม" };
+  if (/สอบ|เรียน|assignment|homework|study|การบ้าน|วิชา/.test(text)) return { category: "Study", reason: "บริบทเกี่ยวกับเรียน งานส่ง หรือสอบ" };
+  if (/family|แม่|พ่อ|บ้าน/.test(text)) return { category: "Family", reason: "บริบทส่วนตัวหรือครอบครัว" };
+  return { category: "Friends", reason: "แชททั่วไป ไม่มีสัญญาณสำคัญพิเศษ" };
+}
+function detectReminderText(text) {
+  return /(พรุ่งนี้|วันนี้|วันศุกร์|deadline|ส่งงาน|ประชุม|นัด|เจอกัน|\d{1,2}\s?โมง|\d{1,2}:\d{2})/i.test(text || "");
+}
+async function aiRequest(task, input) {
+  try {
+    const res = await fetch(`${API_BASE}/api/ai`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task, input }),
+    });
+    return await res.json();
+  } catch {
+    return { mode: "mock", text: "AI mock: ยังไม่ได้เชื่อมต่อ API" };
+  }
+}
 function migrateStateIds(data) {
   const idMap = new Map();
   for (const user of data.users || []) {
@@ -247,7 +299,50 @@ function migrateStateIds(data) {
 function formatTime(v) {
   return new Intl.DateTimeFormat("th-TH",{hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date(v));
 }
-function ui(th, en) { return state.appSettings.language === "en" ? en : th; }
+function defaultFolderSettings() {
+  return Object.fromEntries(DEFAULT_FOLDERS.map(f => [f, {
+    notify: f !== "Advertising", bump: f !== "Advertising", badge: true, highlight: true,
+    order: DEFAULT_FOLDERS.indexOf(f) + 1,
+    keywords: f === "Important" ? IMPORTANT_KEYWORDS.join(", ") : f === "Advertising" ? AD_KEYWORDS.join(", ") : ""
+  }]));
+}
+function defaultUserSettings() {
+  return {
+    appSettings: { fontSize: "normal", theme: "light", language: "th" },
+    folderSettings: defaultFolderSettings(),
+    customFolders: [],
+    deletedFolders: [],
+    notificationSettings: { priorityOnly: false, quietAds: true },
+    aiSettings: { enabled: true, autoCategorize: true, autoSearch: true, autoTranslate: false, tutorialSeen: false },
+    chatAiDisabled: {},
+    chatAutoTranslate: {},
+    chatPriority: {},
+    chatCategories: {},
+    chatAiReasons: {},
+    pinnedFiles: [],
+    reminders: [],
+    savedFiles: [],
+  };
+}
+function userSettings(userId = sessionId) {
+  if (!state.userSettings) state.userSettings = {};
+  const key = userId || "__guest";
+  if (!state.userSettings[key]) state.userSettings[key] = defaultUserSettings();
+  const base = defaultUserSettings();
+  state.userSettings[key] = {
+    ...base,
+    ...state.userSettings[key],
+    appSettings: { ...base.appSettings, ...(state.userSettings[key].appSettings || {}) },
+    folderSettings: { ...base.folderSettings, ...(state.userSettings[key].folderSettings || {}) },
+    notificationSettings: { ...base.notificationSettings, ...(state.userSettings[key].notificationSettings || {}) },
+    aiSettings: { ...base.aiSettings, ...(state.userSettings[key].aiSettings || {}) },
+  };
+  return state.userSettings[key];
+}
+function activeAppSettings() {
+  return IS_V2 && sessionId ? userSettings().appSettings : state.appSettings;
+}
+function ui(th, en) { return activeAppSettings().language === "en" ? en : th; }
 
 function currentUser() { return state.users.find(u => u.id === sessionId) || null; }
 function byId(id) { return state.users.find(u => u.id === id); }
@@ -260,25 +355,28 @@ function areFriends(a, b) { return state.friendships.some(p => p.includes(a) && 
 function addFriendPair(a, b) { if (!areFriends(a, b)) state.friendships.push([a, b]); }
 function removeFriendPair(a, b) { state.friendships = state.friendships.filter(p => !(p.includes(a) && p.includes(b))); }
 function rawFolderNames() {
-  const deleted = new Set((state.deletedFolders || []).filter(f => !DEFAULT_FOLDERS.includes(f)));
-  return unique([...DEFAULT_FOLDERS, ...(state.customFolders||[])]).filter(f => !deleted.has(f));
+  const settings = IS_V2 && sessionId ? userSettings() : state;
+  const deleted = new Set((settings.deletedFolders || []).filter(f => !DEFAULT_FOLDERS.includes(f)));
+  return unique([...DEFAULT_FOLDERS, ...(settings.customFolders||[])]).filter(f => !deleted.has(f));
 }
 function folderNames() {
   return rawFolderNames()
     .sort((a, b) => (ensureFolderSetting(a).order ?? 999) - (ensureFolderSetting(b).order ?? 999) || a.localeCompare(b));
 }
 function ensureFolderSetting(f) {
-  if (!state.folderSettings[f]) state.folderSettings[f] = {notify:true,bump:true,badge:true,highlight:true,order:rawFolderNames().indexOf(f)+1,keywords:""};
-  state.folderSettings[f] = {
+  const settings = IS_V2 && sessionId ? userSettings() : state;
+  if (!settings.folderSettings) settings.folderSettings = {};
+  if (!settings.folderSettings[f]) settings.folderSettings[f] = {notify:true,bump:true,badge:true,highlight:true,order:rawFolderNames().indexOf(f)+1,keywords:""};
+  settings.folderSettings[f] = {
     notify: true,
     bump: true,
     badge: true,
     highlight: true,
     order: rawFolderNames().indexOf(f) + 1,
     keywords: "",
-    ...state.folderSettings[f],
+    ...settings.folderSettings[f],
   };
-  return state.folderSettings[f];
+  return settings.folderSettings[f];
 }
 function keywordList(value) {
   return String(value || "").split(/[,|\n]/).map(k => k.trim().toLowerCase()).filter(Boolean);
@@ -546,7 +644,8 @@ function sendMessage(text, file) {
   const category = classifyMessage(`${text} ${file?.name||""}`);
   const now = Date.now();
   chat.messages.push({ id:makeId("msg"), senderId:sessionId, text:text.trim(), file,
-    createdAt:now, deliveredAt:now+1000, readAt:null, hiddenFor:[], unsent:false, category });
+    createdAt:now, deliveredAt:now+1000, readAt:null, hiddenFor:[], unsent:false, category,
+    reminderSuggestion: IS_V2 && detectReminderText(`${text} ${file?.name||""}`) });
   chat.updatedAt = now;
   if (chat.tags.includes("Request")) { chat.tags=["Main"]; recipients.forEach(m=>addFriendPair(sessionId,m)); }
   if (category==="advertising") chat.tags=unique(["Advertising",...chat.tags.filter(t=>t!=="Important")]);
@@ -635,8 +734,9 @@ function renderApp(user) {
   const chats = filteredChats();
   let selected = state.chats.find(c=>c.id===view.chatId&&c.members.includes(user.id)) || chats[0] || null;
   if (selected) view.chatId=selected.id;
+  const appSettings = activeAppSettings();
   app.innerHTML = `
-<section class="app-shell screen-${view.screen} theme-${state.appSettings.theme} font-${state.appSettings.fontSize}">
+<section class="app-shell screen-${view.screen} theme-${appSettings.theme} font-${appSettings.fontSize} ${IS_V2 ? "app-v2" : ""}">
   ${renderRail(user)}
   ${renderHome()}
   ${renderChatList(chats)}
@@ -691,7 +791,9 @@ function renderRail(user) {
 }
 
 function renderBottomNav() {
-  const items = [["home","","home",ui("หน้าแรก","Home")],["list","chat","message-circle",ui("แชท","Chat")],["voom","","play-square","VOOM"],["today","","newspaper","Today"],["wallet","","wallet","Wallet"]];
+  const items = IS_V2
+    ? [["home","","home",ui("หน้าแรก","Home")],["list","chat","message-circle",ui("แชท","Chat")],["tools","aiSearch","sparkles","AI"],["tools","library","folder-open","Files"],["tools","settings","settings",ui("ตั้งค่า","Settings")]]
+    : [["home","","home",ui("หน้าแรก","Home")],["list","chat","message-circle",ui("แชท","Chat")],["voom","","play-square","VOOM"],["today","","newspaper","Today"],["wallet","","wallet","Wallet"]];
   return `<nav class="bottom-nav">${items.map(([sc,tab,icon,label])=>`
     <button class="${view.screen===sc?"active":""}" data-action="bottom-nav" data-screen="${sc}" data-tab="${tab}">
       <i data-lucide="${icon}"></i><span>${label}</span>
@@ -699,15 +801,27 @@ function renderBottomNav() {
 }
 
 function renderHome() {
-  const actions=[["เพิ่มเพื่อน","user-plus","people"],["สร้างกลุ่ม","users","groups"],["OpenChat","messages-square","coming"],["สร้าง Folder","folder-plus","newFolder"],["ตั้งค่า Folder","folder-cog","folders"],["Settings","settings","settings"],["คลังไฟล์","folder-open","library"],["Profile QR","qr-code","profile"]];
+  const actions = IS_V2
+    ? [["เพิ่มเพื่อน","user-plus","people"],["AI Search","sparkles","aiSearch"],["File Hub","folder-open","library"],["สรุปข่าววันนี้","newspaper","todaySummary"],["Reminder","alarm-clock","reminders"],["Priority","bell-ring","notifications"],["Privacy AI","shield","privacy"],["Settings","settings","settings"]]
+    : [["เพิ่มเพื่อน","user-plus","people"],["สร้างกลุ่ม","users","groups"],["OpenChat","messages-square","coming"],["สร้าง Folder","folder-plus","newFolder"],["ตั้งค่า Folder","folder-cog","folders"],["Settings","settings","settings"],["คลังไฟล์","folder-open","library"],["Profile QR","qr-code","profile"]];
   return `<section class="home-page">
-  <div class="home-hero"><p>TaiTalk Home</p><h2>ทุกอย่างของแชทอยู่ที่นี่</h2></div>
+  <div class="home-hero"><p>${IS_V2 ? "TaiTalk V2" : "TaiTalk Home"}</p><h2>${IS_V2 ? "AI ช่วยจัดแชท ไฟล์ และแจ้งเตือน" : "ทุกอย่างของแชทอยู่ที่นี่"}</h2></div>
+  ${IS_V2 ? renderOnboardingCard() : ""}
   <div class="quick-grid">${actions.map(([label,icon,tab])=>`
     <button data-action="${tab==="coming"?"coming-soon":"detail-tab"}" data-tab="${tab}" data-feature="${label}">
       <i data-lucide="${icon}"></i><span>${label}</span>
     </button>`).join("")}</div>
-  <div class="home-card"><strong>LINE-style services</strong><p>Stickers, official accounts, games, coupons, mini apps</p></div>
+  <div class="home-card"><strong>${IS_V2 ? "ทำไมควรลอง V2" : "LINE-style services"}</strong><p>${IS_V2 ? "เก็บไฟล์ไม่หมดอายุ, ค้นหาด้วย AI, สรุปแชท, privacy ต่อแชท และตั้งค่าส่วนตัวต่อบัญชี" : "Stickers, official accounts, games, coupons, mini apps"}</p></div>
 </section>`;
+}
+
+function renderOnboardingCard() {
+  if (!IS_V2 || userSettings().aiSettings.tutorialSeen) return "";
+  return `<div class="home-card onboarding-card">
+    <strong>เริ่มต้น TaiTalk V2</strong>
+    <p>V2 เพิ่ม Folder ส่วนตัว, File Hub, AI Search, AI Summary, Reminder และ Privacy Control</p>
+    <div class="inline"><button class="primary" data-action="detail-tab" data-tab="tutorial">ดู Tutorial</button><button class="ghost" data-action="skip-tutorial">Skip</button></div>
+  </div>`;
 }
 
 function renderContentPage() {
@@ -748,6 +862,7 @@ function renderChatRow(chat) {
     chat.tags.includes("Advertising")?`<span class="label ad">Advertising</span>`:"",
     chat.type==="group"?`<span class="label">Group</span>`:"",
   ].join("");
+  const ai = IS_V2 ? aiCategoryForChat(chat) : null;
 
   const isOpen = view.openSwipeChatId === chat.id;
   const openClass = isOpen ? (view.openSwipeDir === "left" ? "open-left" : "open-right") : "";
@@ -771,7 +886,8 @@ function renderChatRow(chat) {
     <span class="preview">
       <strong>${esc(chatName(chat))}</strong>
       <span class="small">${latest?esc(latest.unsent?"ยกเลิกข้อความแล้ว":latest.file?latest.file.name:latest.text):"เริ่มแชท"}</span>
-      <span class="labels">${chat.pinnedFor?.includes(user.id)?`<span class="label">Pinned</span>`:""}${chat.mutedFor?.includes(user.id)?`<span class="label">Muted</span>`:""}${labels}</span>
+      <span class="labels">${chat.pinnedFor?.includes(user.id)?`<span class="label">Pinned</span>`:""}${chat.mutedFor?.includes(user.id)?`<span class="label">Muted</span>`:""}${labels}${IS_V2?`<span class="label ${ai.category==="Private Chat"?"private":""}">${esc(ai.category)}</span>`:""}</span>
+      ${IS_V2 ? `<span class="small ai-reason">${esc(ai.reason)}</span>` : ""}
     </span>
     <span><time>${latest?formatTime(latest.createdAt):""}</time>${unread?`<span class="badge">${unread}</span>`:""}</span>
   </button>
@@ -804,6 +920,7 @@ function renderChat(chat) {
     </div>
     <div class="chat-actions">
       ${otherId ? `<button class="mini" data-action="switch-side" data-chat="${chat.id}" data-user="${otherId}">สลับฝั่ง</button>` : ""}
+      ${IS_V2 ? `<button class="mini" data-action="summarize-chat" data-chat="${chat.id}"><i data-lucide="sparkles"></i>สรุป</button>` : ""}
       <button class="icon-btn" data-action="call"><i data-lucide="phone"></i></button>
       <button class="icon-btn" data-action="call"><i data-lucide="video"></i></button>
       <button class="icon-btn" data-action="open-chat-settings"><i data-lucide="menu"></i></button>
@@ -811,7 +928,9 @@ function renderChat(chat) {
   </header>
   <div class="messages">
     <div class="dayline">วันนี้</div>
+    ${IS_V2 && chat.summary ? `<div class="ai-summary-card"><strong>AI Summary</strong><pre>${esc(chat.summary)}</pre></div>` : ""}
     ${messages.length?messages.map(m=>renderMessage(chat,m)).join(""):`<p class="empty">ยังไม่มีข้อความ</p>`}
+    ${IS_V2 ? `<button class="jump-latest" data-action="jump-latest">กลับไปข้อความล่าสุด</button>` : ""}
   </div>
   <form class="composer" data-action="send-message">
     ${chat.tags.includes("Request")?`<p class="hint">ตอบกลับเพื่อย้ายแชทเข้า Main</p>`:""}
@@ -823,9 +942,16 @@ function renderChat(chat) {
       <label class="icon-btn"><i data-lucide="plus"></i><input type="file" data-action="file-input" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip" /></label>
       <button class="icon-btn" type="button" data-action="coming-soon" data-feature="กล้อง"><i data-lucide="camera"></i></button>
       <input name="message" placeholder="พิมพ์ข้อความ" autocomplete="off" />
-      <button class="icon-btn" type="button" data-action="coming-soon" data-feature="Emoji"><i data-lucide="smile"></i></button>
+      <button class="icon-btn" type="button" data-action="${IS_V2?"ai-compose":"coming-soon"}" data-feature="Emoji"><i data-lucide="${IS_V2?"wand-sparkles":"smile"}"></i></button>
       <button class="send-btn" type="submit"><i data-lucide="send"></i></button>
     </div>
+    ${IS_V2 ? `<div class="ai-compose-bar">
+      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="rewrite">Rewrite</button>
+      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="formal">Formal</button>
+      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="friendly">Friendly</button>
+      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="shorten">Shorten</button>
+      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="translate">Translate</button>
+    </div>` : ""}
   </form>
 </section>`;
 }
@@ -839,10 +965,13 @@ function renderMessage(chat, msg) {
   ${chat.type==="group"&&!mine?`<span class="small">${esc(userName(sender))}</span>`:""}
   <div class="bubble${cls?" "+cls:""}">
     ${msg.unsent?`<span class="small">ยกเลิกข้อความแล้ว`:(esc(msg.text)+(msg.file?`<div class="file-chip">${msg.file.type?.startsWith("image/")&&msg.file.url?`<img src="${esc(msg.file.url)}" alt="${esc(msg.file.name)}" />`:`<i data-lucide="${fileIcon(msg.file.name)}"></i>`}<div><strong>${esc(msg.file.name)}</strong><div class="small">${esc(msg.file.type||"file")}</div></div></div>`:"")+`</span>`)}
+    ${IS_V2 && msg.translation ? `<div class="translation">แปล: ${esc(msg.translation)}</div>` : ""}
   </div>
+  ${IS_V2 && msg.reminderSuggestion ? `<div class="reminder-card"><strong>ตรวจพบนัดหมาย</strong><span>${esc(msg.text || msg.file?.name || "")}</span><button class="mini" data-action="create-reminder" data-chat="${chat.id}" data-message="${msg.id}">Create Reminder</button><button class="mini" data-action="ignore-reminder" data-chat="${chat.id}" data-message="${msg.id}">Ignore</button></div>` : ""}
   <div class="status">${statusText(msg,mine)}</div>
   ${!msg.unsent?`<div class="message-menu">
     <button class="mini" data-action="delete-self" data-chat="${chat.id}" data-message="${msg.id}">ลบฝั่งฉัน</button>
+    ${IS_V2 ? `<button class="mini" data-action="translate-message" data-chat="${chat.id}" data-message="${msg.id}">แปล</button>` : ""}
     ${canUnsend?`<button class="mini danger" data-action="unsend" data-chat="${chat.id}" data-message="${msg.id}">ลบทั้งสองฝั่ง</button>`:""}
   </div>`:""}
 </article>`;
@@ -857,7 +986,7 @@ function renderDetail(selected) {
   return `<aside class="detail">
   <div class="section-head">
     <button class="icon-btn mobile-only" data-action="back-list"><i data-lucide="chevron-left"></i></button>
-    <strong>${{people:"Friends",groups:"Group",notifications:"Notifications",settings:"Settings",profile:"Profile",folders:"Folder Settings",newFolder:"Create Folder",library:"Media Library"}[view.detailTab]||"จัดการ"}</strong>
+    <strong>${{people:"Friends",groups:"Group",notifications:"Priority Center",settings:"Settings",profile:"Profile",folders:"Folder Settings",newFolder:"Create Folder",library:"File Hub",aiSearch:"AI Search",reminders:"Reminders",privacy:"AI Privacy",tutorial:"Tutorial",todaySummary:"AI Summary"}[view.detailTab]||"จัดการ"}</strong>
   </div>
   ${showTabs?`<div class="detail-tabs"><div class="segmented">
     <button class="${view.detailTab==="people"?"active":""}" data-action="detail-tab" data-tab="people">เพื่อน</button>
@@ -876,6 +1005,11 @@ function detailPanel(selected) {
   if (view.detailTab==="folders")       return folderSettingsPanel();
   if (view.detailTab==="newFolder")     return createFolderPanel();
   if (view.detailTab==="library")       return libraryPanel();
+  if (view.detailTab==="aiSearch")      return aiSearchPanel();
+  if (view.detailTab==="reminders")     return remindersPanel();
+  if (view.detailTab==="privacy")       return privacyPanel();
+  if (view.detailTab==="tutorial")      return tutorialPanel();
+  if (view.detailTab==="todaySummary")  return todaySummaryPanel();
   return peoplePanel(selected);
 }
 
@@ -997,10 +1131,12 @@ function profilePanel() {
 function notificationsPanel() {
   const requests = state.chats.filter(c=>c.members.includes(sessionId)&&c.tags.includes("Request"));
   const important = state.chats.filter(c=>c.members.includes(sessionId)&&(c.importantUnread?.[sessionId]||0)>0);
+  const priority = IS_V2 ? state.chats.filter(c=>c.members.includes(sessionId) && (userSettings().chatPriority?.[c.id]==="high" || c.tags.includes("Important"))) : [];
   return `<div class="stack">
+  ${IS_V2 ? `<div class="block"><h3>Priority Center</h3><p class="hint">รวม deadline, ประกาศ, ข้อความสำคัญ และแชท priority สูง</p></div>${priority.map(c=>`<button class="notification-card" data-action="select-chat" data-chat="${c.id}">${avatarHtml(chatAvatar(c),chatName(c))}<span><strong>Priority</strong><span>${esc(chatName(c))} · ${esc(aiCategoryForChat(c).reason)}</span></span><time>${formatTime(c.updatedAt)}</time></button>`).join("")}` : ""}
   ${requests.map(c=>`<button class="notification-card" data-action="select-chat" data-chat="${c.id}">${avatarHtml(chatAvatar(c),chatName(c))}<span><strong>คำขอข้อความ</strong><span>${esc(chatName(c))}</span></span><time>${formatTime(c.updatedAt)}</time></button>`).join("")}
   ${important.map(c=>`<button class="notification-card" data-action="select-chat" data-chat="${c.id}">${avatarHtml(chatAvatar(c),chatName(c))}<span><strong>Important</strong><span>${esc(chatName(c))}</span></span><time>${formatTime(c.updatedAt)}</time></button>`).join("")}
-  ${!requests.length&&!important.length?`<div class="block"><p class="empty">ยังไม่มีแจ้งเตือน</p></div>`:""}
+  ${!requests.length&&!important.length&&!priority.length?`<div class="block"><p class="empty">ยังไม่มีแจ้งเตือน</p></div>`:""}
 </div>`;
 }
 
@@ -1028,11 +1164,19 @@ function groupPanel(selected) {
 }
 
 function settingsPanel() {
+  const appSettings = activeAppSettings();
+  const settings = IS_V2 ? userSettings() : null;
   return `<div class="stack"><div class="block"><h3>${ui("การแสดงผล","Appearance")}</h3>
-  <label class="field">${ui("ภาษา","Language")}<select data-action="language"><option value="th" ${state.appSettings.language==="th"?"selected":""}>ไทย</option><option value="en" ${state.appSettings.language==="en"?"selected":""}>English</option></select></label>
-  <label class="field">${ui("ขนาดตัวหนังสือ","Font size")}<select data-action="font-size"><option value="small" ${state.appSettings.fontSize==="small"?"selected":""}>เล็ก</option><option value="normal" ${state.appSettings.fontSize==="normal"?"selected":""}>ปกติ</option><option value="large" ${state.appSettings.fontSize==="large"?"selected":""}>ใหญ่</option></select></label>
-  <label class="switch-row"><span>${ui("ธีมมืด","Dark mode")}</span><input type="checkbox" ${state.appSettings.theme==="dark"?"checked":""} data-action="theme-toggle" /></label>
-</div><div class="block"><h3>โฟลเดอร์</h3><button class="primary full" data-action="detail-tab" data-tab="folders"><i data-lucide="folder-cog"></i>ตั้งค่าโฟลเดอร์</button></div></div>`;
+  <label class="field">${ui("ภาษา","Language")}<select data-action="language"><option value="th" ${appSettings.language==="th"?"selected":""}>ไทย</option><option value="en" ${appSettings.language==="en"?"selected":""}>English</option></select></label>
+  <label class="field">${ui("ขนาดตัวหนังสือ","Font size")}<select data-action="font-size"><option value="small" ${appSettings.fontSize==="small"?"selected":""}>เล็ก</option><option value="normal" ${appSettings.fontSize==="normal"?"selected":""}>ปกติ</option><option value="large" ${appSettings.fontSize==="large"?"selected":""}>ใหญ่</option></select></label>
+  <label class="switch-row"><span>${ui("ธีมมืด","Dark mode")}</span><input type="checkbox" ${appSettings.theme==="dark"?"checked":""} data-action="theme-toggle" /></label>
+</div><div class="block"><h3>โฟลเดอร์</h3><button class="primary full" data-action="detail-tab" data-tab="folders"><i data-lucide="folder-cog"></i>ตั้งค่าโฟลเดอร์</button></div>
+${IS_V2 ? `<div class="block"><h3>AI Settings</h3>
+  <label class="switch-row"><span>เปิด AI Features</span><input type="checkbox" ${settings.aiSettings.enabled?"checked":""} data-action="ai-setting" data-key="enabled" /></label>
+  <label class="switch-row"><span>AI จัดหมวดอัตโนมัติ</span><input type="checkbox" ${settings.aiSettings.autoCategorize?"checked":""} data-action="ai-setting" data-key="autoCategorize" /></label>
+  <button class="ghost full" data-action="detail-tab" data-tab="privacy"><i data-lucide="shield"></i>Privacy Settings</button>
+  <button class="ghost full" data-action="detail-tab" data-tab="tutorial"><i data-lucide="circle-help"></i>ดู Tutorial อีกครั้ง</button>
+</div><div class="block"><h3>Backup / Restore</h3><button class="ghost full" data-action="export-backup"><i data-lucide="download"></i>Export Backup</button><label class="ghost full"><i data-lucide="upload"></i>Import Backup<input type="file" data-action="import-backup" accept="application/json" /></label><p class="hint">Backup mock จะ export state ทั้งหมดเป็น JSON</p></div>` : ""}</div>`;
 }
 
 function folderSettingsPanel() {
@@ -1130,11 +1274,58 @@ function createFolderPanel() {
 function libraryPanel() {
   const files = state.chats.filter(c=>c.members.includes(sessionId)).flatMap(c=>visibleMessages(c).filter(m=>m.file).map(m=>({c,m})));
   const photos = files.filter(({m})=>m.file.type?.startsWith("image/"));
+  if (IS_V2) {
+    const all = allFiles();
+    const pinned = new Set(userSettings().pinnedFiles || []);
+    return `<div class="stack">
+      <div class="media-summary"><div><strong>${all.length}</strong><span>All Files</span></div><div><strong>${[...pinned].length}</strong><span>Pinned</span></div></div>
+      <div class="block"><h3>File Hub</h3><input data-action="file-search" placeholder="ค้นหาไฟล์ ชื่อแชท วิชา วันที่" /><p class="hint">ไฟล์ใน mock นี้ไม่หมดอายุ และรวมจากทุกแชท</p></div>
+      <div class="block"><h3>ไฟล์ทั้งหมด</h3>${all.length ? all.map(({chat,message,file})=>`<div class="file-hub-row"><i data-lucide="${fileIcon(file.name)}"></i><span><strong>${esc(file.name)}</strong><span class="small">${esc(chatName(chat))} · ${formatTime(message.createdAt)} · ${fileTypeLabel(file)}</span></span><button class="mini" data-action="pin-file" data-file="${esc(message.id)}">${pinned.has(message.id)?"Unpin":"Pin"}</button></div>`).join("") : `<div class="empty-state"><i data-lucide="folder-open"></i><p class="empty">ยังไม่มีไฟล์ ส่งไฟล์ในแชทแล้วจะมาอยู่ที่นี่</p></div>`}</div>
+    </div>`;
+  }
   return `<div class="stack">
   <div class="media-summary"><div><strong>${photos.length}</strong><span>Photos</span></div><div><strong>${files.length}</strong><span>Files</span></div></div>
   <div class="block"><h3>รูปทั้งหมด</h3><div class="photo-grid">${photos.length?photos.map(({m})=>`<img src="${esc(m.file.url)}" alt="${esc(m.file.name)}" />`).join(""):`<p class="empty">ยังไม่มีรูป</p>`}</div></div>
   <div class="block"><h3>ไฟล์ทั้งหมด</h3>${files.length?files.map(({c,m})=>`<button class="result-row result-button" data-action="select-chat" data-chat="${c.id}"><span><strong>${esc(m.file.name)}</strong><span class="small">${esc(chatName(c))}</span></span><i data-lucide="${fileIcon(m.file.name)}"></i></button>`).join(""):`<p class="empty">ยังไม่มีไฟล์</p>`}</div>
 </div>`;
+}
+
+function aiSearchPanel() {
+  const q = view.search.trim().toLowerCase();
+  const chatResults = q ? state.chats.filter(c=>c.members.includes(sessionId) && `${chatName(c)} ${visibleMessages(c).map(m=>m.text+" "+(m.file?.name||"")).join(" ")}`.toLowerCase().includes(q)) : [];
+  const fileResults = q ? allFiles().filter(({chat,file})=>`${chatName(chat)} ${file.name} ${fileTypeLabel(file)}`.toLowerCase().includes(q)) : [];
+  return `<div class="stack">
+    <div class="block"><h3>AI Search</h3><form class="inline" data-action="do-chat-search"><input name="q" value="${esc(view.search)}" placeholder="เช่น ไฟล์งาน marketing อยู่ไหน" /><button class="primary"><i data-lucide="search"></i></button></form><p class="hint">รองรับ keyword และคำถามธรรมชาติแบบ mock</p></div>
+    <div class="block"><h3>ผลลัพธ์แชท</h3>${chatResults.length?chatResults.map(c=>`<button class="result-row result-button" data-action="select-chat" data-chat="${c.id}"><span><strong>${esc(chatName(c))}</strong><span class="small">${esc(aiCategoryForChat(c).reason)}</span></span><i data-lucide="message-circle"></i></button>`).join(""):`<p class="empty">พิมพ์คำค้นหาเพื่อหาแชท</p>`}</div>
+    <div class="block"><h3>ผลลัพธ์ไฟล์</h3>${fileResults.length?fileResults.map(({chat,message,file})=>`<button class="result-row result-button" data-action="select-chat" data-chat="${chat.id}"><span><strong>${esc(file.name)}</strong><span class="small">${esc(chatName(chat))} · ${formatTime(message.createdAt)} · ${fileTypeLabel(file)}</span></span><i data-lucide="${fileIcon(file.name)}"></i></button>`).join(""):`<p class="empty">ยังไม่พบไฟล์ที่ตรงคำค้นหา</p>`}</div>
+  </div>`;
+}
+
+function remindersPanel() {
+  const reminders = userSettings().reminders || [];
+  return `<div class="stack"><div class="block"><h3>Smart Reminder</h3><p class="hint">AI mock จะตรวจคำอย่าง พรุ่งนี้, ส่งงาน, deadline, นัด, เวลา</p></div>
+  <div class="block">${reminders.length?reminders.map(r=>`<div class="result-row"><span><strong>${esc(r.text)}</strong><span class="small">${esc(r.chatName)} · ${formatTime(r.createdAt)}</span></span><span class="label">Reminder</span></div>`).join(""):`<p class="empty">ยังไม่มี Reminder</p>`}</div></div>`;
+}
+
+function privacyPanel() {
+  const settings = userSettings();
+  const chats = state.chats.filter(c=>c.members.includes(sessionId));
+  return `<div class="stack"><div class="block"><h3>AI Privacy</h3><p class="hint">AI วิเคราะห์ชื่อแชท ข้อความล่าสุด ชื่อไฟล์ และ keyword เพื่อช่วยจัดหมวด ค้นหา สรุป และแปล ผู้ใช้ปิดแยกต่อแชทได้</p>
+  <label class="switch-row"><span>เปิด AI Features</span><input type="checkbox" ${settings.aiSettings.enabled?"checked":""} data-action="ai-setting" data-key="enabled" /></label>
+  <label class="switch-row"><span>Auto Translation ค่าเริ่มต้น</span><input type="checkbox" ${settings.aiSettings.autoTranslate?"checked":""} data-action="ai-setting" data-key="autoTranslate" /></label></div>
+  <div class="block"><h3>ปิด AI รายแชท</h3>${chats.length?chats.map(c=>`<label class="switch-row"><span>${esc(chatName(c))}<span class="small">${chatAiDisabled(c)?"Private Chat":"AI วิเคราะห์ได้"}</span></span><input type="checkbox" ${chatAiDisabled(c)?"checked":""} data-action="chat-ai-disabled" data-chat="${c.id}" /></label>`).join(""):`<p class="empty">ยังไม่มีแชท</p>`}</div></div>`;
+}
+
+function tutorialPanel() {
+  return `<div class="stack"><div class="block"><h3>TaiTalk V2 Tutorial</h3><p class="hint">คู่มือสั้นสำหรับฟีเจอร์ใหม่</p></div>
+  ${["Folder ส่วนตัวต่อบัญชี","File Hub รวมไฟล์ไม่หมดอายุ","AI Search ค้นหาด้วยคำถาม","AI Summary สรุปแชทและข่าว","Reminder จับ deadline จากข้อความ","Privacy ปิด AI รายแชท"].map((t,i)=>`<div class="block tutorial-step"><span class="label">${i+1}</span><strong>${t}</strong><p class="hint">แตะปุ่มใน Home หรือ Settings เพื่อใช้งานซ้ำได้ทุกเมื่อ</p></div>`).join("")}
+  <button class="primary full" data-action="skip-tutorial">เข้าใจแล้ว</button></div>`;
+}
+
+function todaySummaryPanel() {
+  const important = state.chats.filter(c=>c.members.includes(sessionId)).flatMap(c=>visibleMessages(c).filter(m=>m.category==="important").map(m=>({c,m}))).slice(-8);
+  return `<div class="stack"><div class="block"><h3>สรุปข่าววันนี้</h3><p class="hint">Mock AI Summary จาก important messages และไฟล์ล่าสุด</p></div>
+  <div class="ai-summary-card"><strong>Today Summary</strong><pre>• Important: ${important.length} รายการ\n• Deadline: ตรวจจากคำว่า วันนี้/พรุ่งนี้/ส่งงาน\n• File: มีไฟล์ใน File Hub ${allFiles().length} ไฟล์\n• To-do: เช็ก Priority Center และ Reminder</pre></div></div>`;
 }
 
 function renderModal() {
@@ -1165,6 +1356,14 @@ function renderChatSettings(chat) {
           ${otherId ? `<button class="ghost danger" data-action="block-user" data-user="${otherId}"><i data-lucide="ban"></i>บล็อก</button>` : ""}
         </div>
       </div>
+      ${IS_V2 ? `<div class="block">
+        <h3>AI Controls</h3>
+        <p class="hint">${esc(aiCategoryForChat(chat).reason)}</p>
+        <label class="switch-row"><span>ปิด AI สำหรับแชทนี้</span><input type="checkbox" ${chatAiDisabled(chat)?"checked":""} data-action="chat-ai-disabled" data-chat="${chat.id}" /></label>
+        <label class="switch-row"><span>Auto Translation</span><input type="checkbox" ${userSettings().chatAutoTranslate?.[chat.id]?"checked":""} data-action="chat-auto-translate" data-chat="${chat.id}" /></label>
+        <label class="field">Priority<select data-action="chat-priority" data-chat="${chat.id}">${["normal","low","high"].map(v=>`<option value="${v}" ${userSettings().chatPriority?.[chat.id]===v?"selected":""}>${v}</option>`).join("")}</select></label>
+        <label class="field">แก้หมวดเอง<select data-action="chat-category" data-chat="${chat.id}">${["Friends","Family","Study","Work","Important","Advertising","Private Chat"].map(v=>`<option value="${v}" ${aiCategoryForChat(chat).category===v?"selected":""}>${v}</option>`).join("")}</select></label>
+      </div>` : ""}
       <div class="block">
         <h3>ค้นหาในแชท</h3>
         <input value="${esc(view.chatSearch)}" data-action="chat-settings-search" placeholder="ค้นหาข้อความหรือชื่อไฟล์" />
@@ -1275,10 +1474,25 @@ app.addEventListener("change", e => {
     view.folderSettingTarget = e.target.value;
     render();
   }
-  if (action==="font-size")    { state.appSettings.fontSize=e.target.value; saveState(); render(); }
-  if (action==="language")     { state.appSettings.language=e.target.value; saveState(); render(); }
-  if (action==="theme-toggle") { state.appSettings.theme=e.target.checked?"dark":"light"; saveState(); render(); }
+  if (action==="font-size")    { activeAppSettings().fontSize=e.target.value; saveState(); render(); }
+  if (action==="language")     { activeAppSettings().language=e.target.value; saveState(); render(); }
+  if (action==="theme-toggle") { activeAppSettings().theme=e.target.checked?"dark":"light"; saveState(); render(); }
   if (action==="group-member-draft") { view.groupMemberDraft=e.target.value; }
+  if (action==="ai-setting") { userSettings().aiSettings[e.target.dataset.key]=e.target.checked; saveState(); render(); }
+  if (action==="chat-ai-disabled") { userSettings().chatAiDisabled[e.target.dataset.chat]=e.target.checked; saveState(); render(); }
+  if (action==="chat-auto-translate") { userSettings().chatAutoTranslate[e.target.dataset.chat]=e.target.checked; saveState(); render(); }
+  if (action==="chat-priority") { userSettings().chatPriority[e.target.dataset.chat]=e.target.value; saveState(); render(); }
+  if (action==="chat-category") {
+    userSettings().chatCategories[e.target.dataset.chat]=e.target.value;
+    userSettings().chatAiReasons[e.target.dataset.chat]="ผู้ใช้แก้หมวดเอง AI mock จดจำการแก้ไขนี้";
+    const chat=state.chats.find(c=>c.id===e.target.dataset.chat);
+    if (chat && !chat.tags.includes(e.target.value)) chat.tags=unique([e.target.value,...chat.tags]);
+    saveState(); render();
+  }
+  if (action==="import-backup") {
+    const file=e.target.files?.[0]; if (!file) return;
+    const r=new FileReader(); r.onload=()=>{ try { state=JSON.parse(r.result); saveState(); render(); } catch { alert("ไฟล์ backup ไม่ถูกต้อง"); } }; r.readAsText(file);
+  }
 });
 
 app.addEventListener("click", e => {
@@ -1351,6 +1565,21 @@ app.addEventListener("click", e => {
   }
   if (action==="open-chat-settings") { view.chatSettingsOpen=true; view.chatSearch=""; render(); }
   if (action==="close-chat-settings") { view.chatSettingsOpen=false; view.chatSearch=""; render(); }
+  if (action==="summarize-chat") {
+    const chat=state.chats.find(c=>c.id===t.dataset.chat);
+    if (chat) {
+      const input={ title: chatName(chat), messages: visibleMessages(chat).slice(-30).map(m=>m.text||m.file?.name||"").join("\n") };
+      aiRequest("summary", input).then(result=>{ chat.summary=result.text; saveState(); render(); });
+    }
+  }
+  if (action==="ai-compose-mode") {
+    const form=t.closest("form");
+    const input=form?.elements?.message;
+    if (input) {
+      const mode=t.dataset.mode;
+      aiRequest(mode==="translate"?"translate":"rewrite", { mode, text: input.value }).then(result=>{ input.value=result.text; input.focus(); });
+    }
+  }
   if (action==="toggle-mute-chat") {
     const chat=state.chats.find(c=>c.id===t.dataset.chat);
     if (chat) {
@@ -1373,6 +1602,9 @@ app.addEventListener("click", e => {
   if (action==="jump-message") {
     view.chatSettingsOpen=false; view.chatSearch=""; render();
   }
+  if (action==="jump-latest") {
+    document.querySelector(".messages")?.scrollTo({ top: document.querySelector(".messages")?.scrollHeight || 0, behavior: "smooth" });
+  }
   if (action==="detail-tab") {
     if (t.classList.contains("profile-button")&&document.querySelector(".app-shell")?.classList.contains("header-compact")) {
       document.querySelector(".app-shell")?.classList.toggle("folder-peek"); return;
@@ -1382,6 +1614,7 @@ app.addEventListener("click", e => {
   if (action==="back-list") { view.screen="list"; render(); }
   if (action==="call"||action==="coming-soon") { document.querySelector("#modal")?.classList.add("show"); }
   if (action==="close-modal") { document.querySelector("#modal")?.classList.remove("show"); }
+  if (action==="skip-tutorial") { userSettings().aiSettings.tutorialSeen=true; saveState(); render(); }
   if (action==="open-scanner") { view.scannerOpen=true; view.scannerStatus="กำลังเตรียมกล้อง..."; render(); }
   if (action==="close-scanner") { view.scannerOpen=false; stopQrScanner(); render(); }
   if (action==="add-by-qr") { addFriendFromQr(view.qrInput); }
@@ -1422,12 +1655,37 @@ app.addEventListener("click", e => {
     const msg=chat?.messages.find(m=>m.id===t.dataset.message);
     if (msg&&(Date.now()-msg.createdAt)/36e5<=24) { msg.unsent=true; msg.text=""; msg.file=null; saveState(); render(); }
   }
+  if (action==="translate-message") {
+    const chat=state.chats.find(c=>c.id===t.dataset.chat);
+    const msg=chat?.messages.find(m=>m.id===t.dataset.message);
+    if (msg) aiRequest("translate", { text: msg.text || msg.file?.name || "", target: "th" }).then(result=>{ msg.translation=result.text; saveState(); render(); });
+  }
+  if (action==="create-reminder" || action==="ignore-reminder") {
+    const chat=state.chats.find(c=>c.id===t.dataset.chat);
+    const msg=chat?.messages.find(m=>m.id===t.dataset.message);
+    if (msg) {
+      if (action==="create-reminder") userSettings().reminders=unique([...(userSettings().reminders||[]), { id: makeId("rem"), text: msg.text || msg.file?.name || "Reminder", chatId: chat.id, chatName: chatName(chat), createdAt: Date.now() }]);
+      msg.reminderSuggestion=false; saveState(); render();
+    }
+  }
+  if (action==="pin-file") {
+    const settings=userSettings();
+    const id=t.dataset.file;
+    settings.pinnedFiles=(settings.pinnedFiles||[]).includes(id) ? settings.pinnedFiles.filter(x=>x!==id) : unique([...(settings.pinnedFiles||[]),id]);
+    saveState(); render();
+  }
+  if (action==="export-backup") {
+    const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=`taitalk-backup-${Date.now()}.json`; a.click(); URL.revokeObjectURL(url);
+  }
   if (action==="create-folder") {
     const name=view.newFolderName.trim(); if (!name) return;
     if (folderNames().some(f=>f.toLowerCase()===name.toLowerCase())) { alert("มี Folder นี้แล้ว"); return; }
-    state.customFolders=unique([...(state.customFolders||[]),name]);
-    state.deletedFolders=(state.deletedFolders||[]).filter(x=>x!==name);
-    state.folderSettings[name]={notify:true,bump:true,badge:true,highlight:true,order:rawFolderNames().length,keywords:""};
+    const settings = IS_V2 && sessionId ? userSettings() : state;
+    settings.customFolders=unique([...(settings.customFolders||[]),name]);
+    settings.deletedFolders=(settings.deletedFolders||[]).filter(x=>x!==name);
+    settings.folderSettings[name]={notify:true,bump:true,badge:true,highlight:true,order:rawFolderNames().length,keywords:""};
     view.newFolderName=""; view.folder=name; view.folderSettingTarget=name;
     view.showNewFolderInput = false;
     saveState(); render();
@@ -1435,9 +1693,10 @@ app.addEventListener("click", e => {
   if (action==="delete-folder") {
     const f=t.dataset.folder;
     if (DEFAULT_FOLDERS.includes(f)) return;
-    state.customFolders=(state.customFolders||[]).filter(x=>x!==f);
-    state.deletedFolders=unique([...(state.deletedFolders||[]),f]);
-    delete state.folderSettings[f];
+    const settings = IS_V2 && sessionId ? userSettings() : state;
+    settings.customFolders=(settings.customFolders||[]).filter(x=>x!==f);
+    settings.deletedFolders=unique([...(settings.deletedFolders||[]),f]);
+    delete settings.folderSettings[f];
     state.chats.forEach(c=>{ c.tags=c.tags.filter(x=>x!==f); if(!c.tags.length)c.tags=["Main"]; });
     if (view.folder===f) view.folder="Main";
     if (view.folderSettingTarget===f) view.folderSettingTarget="Main";
