@@ -244,6 +244,7 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr auto;
+  color: var(--ink);
   background: var(--white);
   border-left: 1px solid var(--line);
   border-right: 1px solid var(--line);
@@ -968,13 +969,18 @@ textarea:focus {
 .jump-latest {
   position: sticky;
   bottom: 8px;
-  display: block;
+  display: none;
   margin: 12px auto 0;
   padding: 8px 12px;
   border-radius: 999px;
   color: var(--white);
   background: var(--green);
   font-weight: 800;
+  box-shadow: 0 8px 24px rgba(18, 199, 102, 0.24);
+}
+
+.jump-latest.show {
+  display: block;
 }
 
 .composer input[type="file"] {

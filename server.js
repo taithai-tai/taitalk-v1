@@ -243,20 +243,46 @@ function notifyClients(clientId) {
 
 function mockAiResult(task, input = {}) {
   const text = String(input.text || input.prompt || "");
-  if (task === "rewrite") return { mode: "mock", text: text ? `${text.trim()} ครับ/ค่ะ` : "ขอบคุณมากครับ/ค่ะ" };
+  if (task === "rewrite") {
+    const mode = input.mode || "rewrite";
+    if (mode === "formal") return { mode: "mock", text: text ? `เรียนแจ้งว่า ${text.trim()}` : "เรียนแจ้งให้ทราบครับ/ค่ะ" };
+    if (mode === "friendly") return { mode: "mock", text: text ? `${text.trim()} นะ ขอบคุณมาก!` : "ได้เลย ขอบคุณมากนะ!" };
+    if (mode === "shorten") return { mode: "mock", text: text ? text.trim().split(/\s+/).slice(0, 14).join(" ") : "รับทราบ" };
+    return { mode: "mock", text: text ? `${text.trim()} ครับ/ค่ะ` : "ขอบคุณมากครับ/ค่ะ" };
+  }
   if (task === "translate") return { mode: "mock", text: `[แปล mock] ${text}` };
   if (task === "summary") return { mode: "mock", text: "• Important: มีข้อความที่ควรติดตาม\n• Deadline: ตรวจคำว่า วันนี้/พรุ่งนี้/ส่งงาน\n• File: รวมไฟล์จากแชทนี้\n• To-do: ตอบกลับหรือสร้าง reminder หากจำเป็น" };
   if (task === "search") return { mode: "mock", text: "ผลลัพธ์ mock: พบข้อมูลที่เกี่ยวข้องจากชื่อแชท ข้อความล่าสุด และชื่อไฟล์" };
   return { mode: "mock", text: "AI mock พร้อมใช้งาน" };
 }
 
+function aiInstruction(task, input = {}) {
+  if (task === "summary") {
+    return "Summarize the chat into concise Thai bullet points. Use exactly these section labels when relevant: Important, Deadline, Link, File, To-do. Do not invent facts.";
+  }
+  if (task === "translate") {
+    return `Translate the provided text. Target language: ${input.target || "Thai"}. Return only the translation, no explanation.`;
+  }
+  if (task === "rewrite") {
+    const mode = input.mode || "rewrite";
+    const modes = {
+      formal: "Rewrite the message in polite formal Thai suitable for work or school.",
+      friendly: "Rewrite the message in friendly natural Thai.",
+      shorten: "Shorten the message while keeping the main meaning.",
+      translate: "Translate the message into natural Thai unless the text is already Thai, then translate it into English.",
+      rewrite: "Improve the wording to be clearer and polite.",
+    };
+    return modes[mode] || modes.rewrite;
+  }
+  if (task === "search") {
+    return "Answer the user's search question using only the provided chat/file context. Include source names, dates, and file types when available.";
+  }
+  return "Help the user with this TaiTalk chat task concisely.";
+}
+
 async function runAi(task, input) {
   if (!OPENROUTER_API_KEY) return mockAiResult(task, input);
-  const prompt = [
-    "You are TaiTalk AI. Reply concisely in Thai unless asked otherwise.",
-    `Task: ${task}`,
-    `Input: ${JSON.stringify(input || {})}`,
-  ].join("\n");
+  const prompt = JSON.stringify(input || {}, null, 2);
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -267,7 +293,11 @@ async function runAi(task, input) {
     },
     body: JSON.stringify({
       model: OPENROUTER_MODEL,
-      messages: [{ role: "user", content: prompt }],
+      messages: [
+        { role: "system", content: `You are TaiTalk AI. ${aiInstruction(task, input)} Reply concisely and naturally.` },
+        { role: "user", content: prompt },
+      ],
+      temperature: task === "rewrite" ? 0.5 : 0.2,
     }),
   });
   if (!response.ok) return mockAiResult(task, input);

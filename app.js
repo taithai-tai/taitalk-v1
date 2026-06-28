@@ -704,6 +704,7 @@ function render() {
   requestAnimationFrame(() => {
     if (window.lucide) window.lucide.createIcons();
     setupCollapsingHeader();
+    setupJumpLatestButton();
     if (view.scannerOpen) startQrScanner();
   });
 }
@@ -933,7 +934,7 @@ function renderChat(chat) {
     <div class="dayline">วันนี้</div>
     ${IS_V2 && chat.summary ? `<div class="ai-summary-card"><strong>AI Summary</strong><pre>${esc(chat.summary)}</pre></div>` : ""}
     ${messages.length?messages.map(m=>renderMessage(chat,m)).join(""):`<p class="empty">ยังไม่มีข้อความ</p>`}
-    ${IS_V2 ? `<button class="jump-latest" data-action="jump-latest">กลับไปข้อความล่าสุด</button>` : ""}
+    ${IS_V2 && messages.length ? `<button class="jump-latest" data-action="jump-latest">กลับไปข้อความล่าสุด</button>` : ""}
   </div>
   <form class="composer" data-action="send-message">
     ${chat.tags.includes("Request")?`<p class="hint">ตอบกลับเพื่อย้ายแชทเข้า Main</p>`:""}
@@ -1402,6 +1403,19 @@ function setupCollapsingHeader() {
       if (!compact) shell.classList.remove("folder-peek");
     },{passive:true});
   });
+}
+
+function setupJumpLatestButton() {
+  const messages = document.querySelector(".chat .messages");
+  const button = document.querySelector(".jump-latest");
+  if (!messages || !button) return;
+  const update = () => {
+    const distanceFromBottom = messages.scrollHeight - messages.clientHeight - messages.scrollTop;
+    button.classList.toggle("show", distanceFromBottom > 96);
+  };
+  update();
+  messages.addEventListener("scroll", update, { passive: true });
+  requestAnimationFrame(update);
 }
 
 // ─── Event listeners ──────────────────────────────────────────
