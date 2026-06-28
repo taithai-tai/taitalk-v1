@@ -65,7 +65,7 @@ LINE_CALLBACK_URL=https://your-railway-domain.up.railway.app/api/auth/line/callb
 Add the same `LINE_CALLBACK_URL` in the LINE Developers Console under the LINE Login channel callback URLs. If you open the app from GitHub Pages instead of Railway, include the backend URL once so the browser can remember it:
 
 ```text
-https://taithai-tai.github.io/taitalk-v1/vb1?apiBase=https://your-railway-domain.up.railway.app
+https://taithai-tai.github.io/taitalk-v1/vb1/?apiBase=https://your-railway-domain.up.railway.app
 ```
 
 When LINE Login succeeds, the server creates or reuses a TaiTalk account linked to the real LINE user ID, then returns the user to V.b1.

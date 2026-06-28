@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync, createReadStream, readFileSync } from "node:fs";
+import { existsSync, createReadStream, readFileSync, statSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -647,7 +647,8 @@ function serveFile(res, pathname) {
       : pathname === "/vb1" || pathname === "/v.b1"
         ? "/vb1.html"
         : decodeURIComponent(pathname);
-  const file = resolve(join(ROOT, clean));
+  let file = resolve(join(ROOT, clean));
+  if (existsSync(file) && statSync(file).isDirectory()) file = resolve(join(file, "index.html"));
   if (!file.startsWith(ROOT) || !existsSync(file)) {
     sendJson(res, 404, { error: "Not found" });
     return;

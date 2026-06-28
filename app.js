@@ -132,6 +132,9 @@ function esc(v) {
 }
 function unique(arr) { return [...new Set(arr)]; }
 function makeId(p) { return `${p}-${Math.random().toString(36).slice(2,8)}-${Date.now().toString(36)}`; }
+function isGithubPagesWithoutBackend() {
+  return location.hostname.endsWith("github.io") && !API_BASE;
+}
 function handleFromUsername(username) {
   return `@${String(username || "user").trim().toLowerCase().replace(/^@+/, "")}`;
 }
@@ -702,6 +705,10 @@ function showAuthError(msg) {
 }
 
 async function handleLineLogin() {
+  if (isGithubPagesWithoutBackend()) {
+    showAuthError("ต้องเปิด V.b1 พร้อม apiBase ของ Railway ก่อน เช่น ?apiBase=https://YOUR-RAILWAY-DOMAIN.up.railway.app");
+    return;
+  }
   if (canUseRemoteSync()) {
     const returnTo = location.href;
     location.href = `${API_BASE}/api/auth/line/start?returnTo=${encodeURIComponent(returnTo)}`;
