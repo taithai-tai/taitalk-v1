@@ -60,10 +60,17 @@ Create a LIFF app in the same LINE Login channel and set the LIFF Endpoint URL t
 https://taithai-tai.github.io/taitalk-v1/vb1/
 ```
 
-Then open V.b1 with both the LIFF ID and backend URL:
+Current LIFF app:
 
 ```text
-https://taithai-tai.github.io/taitalk-v1/vb1/?liffId=YOUR_LIFF_ID&apiBase=https://your-railway-domain.up.railway.app
+LIFF ID: 2008685502-SecJ7r28
+LIFF URL: https://liff.line.me/2008685502-SecJ7r28
+```
+
+Open V.b1 with the backend URL:
+
+```text
+https://taithai-tai.github.io/taitalk-v1/vb1/?apiBase=https://your-railway-domain.up.railway.app
 ```
 
 When LIFF Login succeeds, the browser sends the LIFF access token to the TaiTalk server. The server verifies it with LINE, creates or reuses a TaiTalk account linked to the real LINE user ID, and logs the user in. If no backend `apiBase` is configured, V.b1 can still create a local LIFF profile account for UI testing, but cross-device sync needs the backend URL.

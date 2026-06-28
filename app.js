@@ -8,13 +8,14 @@ const SYNC_CHANNEL = "taitalk:v2:sync";
 const TAB_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const API_BASE_KEY = "taitalk:api-base";
 const LIFF_ID_KEY = "taitalk:liff-id";
+const DEFAULT_LIFF_ID = "2008685502-SecJ7r28";
 const urlParams = new URLSearchParams(location.search);
 const queryApiBase = urlParams.get("apiBase") || "";
 const queryLiffId = urlParams.get("liffId") || "";
 if (queryApiBase) localStorage.setItem(API_BASE_KEY, queryApiBase.replace(/\/+$/, ""));
 if (queryLiffId) localStorage.setItem(LIFF_ID_KEY, queryLiffId.trim());
 const API_BASE = (window.TAITALK_API_BASE || queryApiBase || localStorage.getItem(API_BASE_KEY) || "").replace(/\/+$/, "");
-const LIFF_ID = (window.TAITALK_LIFF_ID || queryLiffId || localStorage.getItem(LIFF_ID_KEY) || "").trim();
+const LIFF_ID = (window.TAITALK_LIFF_ID || queryLiffId || localStorage.getItem(LIFF_ID_KEY) || DEFAULT_LIFF_ID).trim();
 const IS_VB1 = location.pathname.includes("/vb1") || location.pathname.includes("/v.b1");
 const IS_V2 = location.pathname.includes("/v2") || IS_VB1;
 const LINE_PROFILE_KEY = "taitalk:vb1:line-profile";
@@ -711,7 +712,7 @@ function showAuthError(msg) {
 async function handleLineLogin() {
   if (!IS_VB1) return;
   if (!LIFF_ID) {
-    showAuthError("ต้องใส่ LIFF ID ก่อน เช่น ?liffId=YOUR_LIFF_ID");
+    showAuthError("ไม่พบ LIFF ID กรุณาใส่ ?liffId=YOUR_LIFF_ID");
     return;
   }
   if (!window.liff) {
@@ -868,7 +869,7 @@ function renderAuth() {
     ${IS_VB1 ? `
     <div class="auth-divider"><span>หรือ</span></div>
     <button class="line-login" type="button" data-action="line-login"><i data-lucide="message-circle"></i>Login with LINE</button>
-    <p class="hint">V.b1 ใช้ LIFF Login จริงเมื่อใส่ LIFF ID แล้ว</p>
+    <p class="hint">V.b1 ใช้ LIFF Login จริงผ่าน LINE app talk</p>
     ` : ""}
   </div>
 </section>`;
