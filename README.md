@@ -52,23 +52,21 @@ Open `http://localhost:3000/v2` for the V2 prototype. V2 keeps the familiar LINE
 
 ## TaiTalk V.b1 prototype
 
-Open `http://localhost:3000/v.b1` or `http://localhost:3000/vb1` for V.b1. This page currently mirrors V2 and adds a LINE Login button.
+Open `http://localhost:3000/v.b1` or `http://localhost:3000/vb1` for V.b1. This page currently mirrors V2 and adds a LIFF Login button.
 
-LINE Login in V.b1 uses LINE OAuth when these server environment variables are set:
-
-```sh
-LINE_CHANNEL_ID=your_line_login_channel_id
-LINE_CHANNEL_SECRET=your_line_login_channel_secret
-LINE_CALLBACK_URL=https://your-railway-domain.up.railway.app/api/auth/line/callback
-```
-
-Add the same `LINE_CALLBACK_URL` in the LINE Developers Console under the LINE Login channel callback URLs. If you open the app from GitHub Pages instead of Railway, include the backend URL once so the browser can remember it:
+Create a LIFF app in the same LINE Login channel and set the LIFF Endpoint URL to:
 
 ```text
-https://taithai-tai.github.io/taitalk-v1/vb1/?apiBase=https://your-railway-domain.up.railway.app
+https://taithai-tai.github.io/taitalk-v1/vb1/
 ```
 
-When LINE Login succeeds, the server creates or reuses a TaiTalk account linked to the real LINE user ID, then returns the user to V.b1.
+Then open V.b1 with both the LIFF ID and backend URL:
+
+```text
+https://taithai-tai.github.io/taitalk-v1/vb1/?liffId=YOUR_LIFF_ID&apiBase=https://your-railway-domain.up.railway.app
+```
+
+When LIFF Login succeeds, the browser sends the LIFF access token to the TaiTalk server. The server verifies it with LINE, creates or reuses a TaiTalk account linked to the real LINE user ID, and logs the user in. If no backend `apiBase` is configured, V.b1 can still create a local LIFF profile account for UI testing, but cross-device sync needs the backend URL.
 
 Optional OpenRouter AI setup:
 

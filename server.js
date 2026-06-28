@@ -352,6 +352,15 @@ async function exchangeLineCode(req, code) {
   return profile;
 }
 
+async function profileFromLineAccessToken(accessToken) {
+  const profileResponse = await fetch(LINE_PROFILE_ENDPOINT, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const profile = await profileResponse.json().catch(() => ({}));
+  if (!profileResponse.ok) throw new Error(profile.message || "LINE access token ไม่ถูกต้อง");
+  return profile;
+}
+
 function notifyClients(clientId) {
   const event = JSON.stringify({ version: db.version, clientId, at: Date.now() });
   for (const res of clients) res.write(`data: ${event}\n\n`);
@@ -783,6 +792,27 @@ createServer(async (req, res) => {
       sendJson(res, 200, { ...publicAuthState(), userId: session.userId });
     } catch (error) {
       sendJson(res, 400, { error: error.message || "Bad request" });
+    }
+    return;
+  }
+  if (url.pathname === "/api/auth/liff" && req.method === "POST") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const accessToken = String(body.accessToken || "").trim();
+      if (!accessToken) {
+        sendJson(res, 400, { error: "ไม่พบ LIFF access token" });
+        return;
+      }
+      const profile = await profileFromLineAccessToken(accessToken);
+      const { user, changed } = upsertLineUser(profile);
+      if (changed) {
+        db.version += 1;
+        await saveDb();
+        notifyClients(body.clientId || "");
+      }
+      sendJson(res, 200, { ...publicAuthState(), userId: user.id });
+    } catch (error) {
+      sendJson(res, 401, { error: error.message || "LIFF Login ไม่สำเร็จ" });
     }
     return;
   }

@@ -7,10 +7,14 @@ const SESSION_KEY = "taitalk:v2:session";
 const SYNC_CHANNEL = "taitalk:v2:sync";
 const TAB_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const API_BASE_KEY = "taitalk:api-base";
+const LIFF_ID_KEY = "taitalk:liff-id";
 const urlParams = new URLSearchParams(location.search);
 const queryApiBase = urlParams.get("apiBase") || "";
+const queryLiffId = urlParams.get("liffId") || "";
 if (queryApiBase) localStorage.setItem(API_BASE_KEY, queryApiBase.replace(/\/+$/, ""));
+if (queryLiffId) localStorage.setItem(LIFF_ID_KEY, queryLiffId.trim());
 const API_BASE = (window.TAITALK_API_BASE || queryApiBase || localStorage.getItem(API_BASE_KEY) || "").replace(/\/+$/, "");
+const LIFF_ID = (window.TAITALK_LIFF_ID || queryLiffId || localStorage.getItem(LIFF_ID_KEY) || "").trim();
 const IS_VB1 = location.pathname.includes("/vb1") || location.pathname.includes("/v.b1");
 const IS_V2 = location.pathname.includes("/v2") || IS_VB1;
 const LINE_PROFILE_KEY = "taitalk:vb1:line-profile";
@@ -705,33 +709,51 @@ function showAuthError(msg) {
 }
 
 async function handleLineLogin() {
-  if (isGithubPagesWithoutBackend()) {
-    showAuthError("ต้องเปิด V.b1 พร้อม apiBase ของ Railway ก่อน เช่น ?apiBase=https://YOUR-RAILWAY-DOMAIN.up.railway.app");
+  if (!IS_VB1) return;
+  if (!LIFF_ID) {
+    showAuthError("ต้องใส่ LIFF ID ก่อน เช่น ?liffId=YOUR_LIFF_ID");
     return;
   }
-  if (canUseRemoteSync()) {
-    const returnTo = location.href;
-    location.href = `${API_BASE}/api/auth/line/start?returnTo=${encodeURIComponent(returnTo)}`;
+  if (!window.liff) {
+    showAuthError("โหลด LIFF SDK ไม่สำเร็จ กรุณารีเฟรชหน้าอีกครั้ง");
     return;
   }
-  const profile = lineMockProfile();
   try {
-    const remoteUserId = await remoteAuth("/api/auth/line", profile);
-    if (remoteUserId) {
-      sessionId = remoteUserId;
-      setStoredSession(sessionId);
-      view._authUser=""; view._authPass="";
-      view.screen="home"; render(); return;
+    await window.liff.init({ liffId: LIFF_ID });
+    if (!window.liff.isLoggedIn()) {
+      const redirectUrl = new URL(location.href);
+      redirectUrl.searchParams.delete("liffId");
+      redirectUrl.searchParams.delete("apiBase");
+      window.liff.login({ redirectUri: redirectUrl.href });
+      return;
     }
-  } catch (error) {
-    if (remoteAvailable) { showAuthError(error.message); return; }
-  }
+    const accessToken = window.liff.getAccessToken();
+    const profile = await window.liff.getProfile();
+    if (!accessToken) throw new Error("ไม่พบ LINE access token");
 
-  const username = lineUsernameFromId(profile.lineId);
+    if (!isGithubPagesWithoutBackend()) {
+      const remoteUserId = await remoteAuth("/api/auth/liff", { accessToken });
+      if (remoteUserId) {
+        sessionId = remoteUserId;
+        setStoredSession(sessionId);
+        view._authUser=""; view._authPass="";
+        view.screen="home"; render(); return;
+      }
+    }
+
+    loginWithLocalLineProfile(profile);
+  } catch (error) {
+    showAuthError(error.message || "LIFF Login ไม่สำเร็จ");
+  }
+}
+
+function loginWithLocalLineProfile(profile) {
+  const lineId = profile.userId || profile.lineId;
+  const username = lineUsernameFromId(lineId);
   const userId = handleFromUsername(username);
-  let user = state.users.find(u => u.lineId === profile.lineId || u.id === userId || u.username === username);
+  let user = state.users.find(u => u.lineId === lineId || u.id === userId || u.username === username);
   if (!user) {
-    user = { id:userId, username, displayName:profile.displayName || "LINE User", password:"line-login", avatar:"", blocked:[], lineId:profile.lineId, authProvider:"line" };
+    user = { id:userId, username, displayName:profile.displayName || "LINE User", password:"line-login", avatar:profile.pictureUrl || "", blocked:[], lineId, authProvider:"liff" };
     state.users.push(user);
     saveState();
   }
@@ -846,7 +868,7 @@ function renderAuth() {
     ${IS_VB1 ? `
     <div class="auth-divider"><span>หรือ</span></div>
     <button class="line-login" type="button" data-action="line-login"><i data-lucide="message-circle"></i>Login with LINE</button>
-    <p class="hint">V.b1 ใช้ LINE Login จริงเมื่อ server ตั้งค่า LINE Channel แล้ว</p>
+    <p class="hint">V.b1 ใช้ LIFF Login จริงเมื่อใส่ LIFF ID แล้ว</p>
     ` : ""}
   </div>
 </section>`;
