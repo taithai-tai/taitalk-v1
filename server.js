@@ -284,29 +284,7 @@ function mockTranslate(text, target = "") {
   const thai = /[\u0E00-\u0E7F]/.test(source);
   const toEnglish = /^en|english$/i.test(target) || (!target && thai);
   const toThai = /^th|thai$/i.test(target) || (!target && !thai);
-  if (toEnglish && thai) {
-    return replacePhrases(source, [
-      ["สวัสดี", "hello"],
-      ["ขอบคุณ", "thank you"],
-      ["ขอโทษ", "sorry"],
-      ["ช่วยส่งไฟล์งานให้หน่อย", "please send me the work file"],
-      ["ช่วยส่งไฟล์ให้หน่อย", "please send me the file"],
-      ["ช่วยดูให้หน่อย", "please take a look"],
-      ["ส่งไฟล์งาน", "send the work file"],
-      ["ส่งไฟล์", "send the file"],
-      ["ส่งงาน", "submit the assignment"],
-      ["ไฟล์งาน", "work file"],
-      ["ให้หน่อย", "for me"],
-      ["ไม่ว่าง", "not available"],
-      ["เดี๋ยว", "later"],
-      ["พรุ่งนี้", "tomorrow"],
-      ["วันนี้", "today"],
-      ["ประชุม", "meeting"],
-      ["สอบ", "exam"],
-      ["ด่วน", "urgent"],
-      ["นะ", ""],
-    ]);
-  }
+  if (toEnglish && thai) return translateThaiTextToEnglish(source);
   if (toThai && !thai) {
     return replacePhrases(source, [
       ["hello", "สวัสดี"],
@@ -328,6 +306,152 @@ function mockTranslate(text, target = "") {
     ], true);
   }
   return source;
+}
+
+const THAI_TO_EN_PHRASES = [
+  ["ช่วยส่งไฟล์งานให้หน่อย", "please send me the work file"],
+  ["ช่วยส่งไฟล์ให้หน่อย", "please send me the file"],
+  ["ช่วยดูให้หน่อย", "please take a look"],
+  ["อ่านไม่เข้าใจ", "hard to understand"],
+  ["อ่านยาก", "hard to read"],
+  ["ไม่ว่าง", "not available"],
+  ["เจอกัน", "see you"],
+  ["กี่โมง", "what time"],
+  ["ส่งไฟล์งาน", "send the work file"],
+  ["ส่งไฟล์", "send the file"],
+  ["ส่งงาน", "submit the assignment"],
+  ["ไฟล์งาน", "work file"],
+  ["ให้หน่อย", "for me"],
+  ["ขอบคุณมาก", "thank you very much"],
+  ["ขอโทษ", "sorry"],
+  ["สวัสดี", "hello"],
+  ["ขอบคุณ", "thank you"],
+  ["พรุ่งนี้", "tomorrow"],
+  ["วันนี้", "today"],
+  ["ประชุม", "meeting"],
+  ["สอบ", "exam"],
+  ["ด่วน", "urgent"],
+];
+
+const THAI_TO_EN_WORDS = {
+  "ผม": "I",
+  "ฉัน": "I",
+  "เรา": "we",
+  "คุณ": "you",
+  "เขา": "they",
+  "ช่วย": "please",
+  "ส่ง": "send",
+  "ไฟล์": "file",
+  "งาน": "work",
+  "การบ้าน": "homework",
+  "โปรเจกต์": "project",
+  "project": "project",
+  "ประชุม": "meeting",
+  "เรียน": "study",
+  "สอบ": "exam",
+  "อ่าน": "read",
+  "เข้าใจ": "understand",
+  "ดู": "look",
+  "คิด": "think",
+  "เช็ค": "check",
+  "แก้": "fix",
+  "ทำ": "do",
+  "ไป": "go",
+  "มา": "come",
+  "กิน": "eat",
+  "ข้าว": "meal",
+  "เจอ": "meet",
+  "นัด": "appointment",
+  "เวลา": "time",
+  "โมง": "o'clock",
+  "ที่": "at",
+  "บ้าน": "home",
+  "โรงเรียน": "school",
+  "มหาลัย": "university",
+  "วันนี้": "today",
+  "พรุ่งนี้": "tomorrow",
+  "เมื่อวาน": "yesterday",
+  "ตอนนี้": "now",
+  "เดี๋ยว": "later",
+  "แล้ว": "already",
+  "ยัง": "still",
+  "ต้อง": "must",
+  "และ": "and",
+  "แต่": "but",
+  "หรือ": "or",
+  "ไม่": "not",
+  "ว่าง": "available",
+  "ได้": "can",
+  "ไหม": "?",
+  "มั้ย": "?",
+  "นะ": "",
+  "ครับ": "",
+  "ค่ะ": "",
+  "คะ": "",
+  "หน่อย": "please",
+  "มาก": "very",
+  "ยาก": "difficult",
+  "ง่าย": "easy",
+  "ดี": "good",
+  "สำคัญ": "important",
+  "ด่วน": "urgent",
+};
+
+function translateThaiTextToEnglish(source) {
+  return splitSentences(source)
+    .map(sentence => translateThaiSentenceToEnglish(sentence))
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+([?.!,])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function splitSentences(source) {
+  return String(source || "")
+    .split(/(?<=[.!?。！？\n])\s*|\s*(?=(?:วันนี้|พรุ่งนี้|เดี๋ยว|แล้ว|แต่|และ)\b)/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function translateThaiSentenceToEnglish(sentence) {
+  let output = protectEnglishPhrases(sentence, THAI_TO_EN_PHRASES);
+  output = output.replace(/[\u0E00-\u0E7F]+/g, run => segmentThai(run).map(word => THAI_TO_EN_WORDS[word] ?? "message").join(" "));
+  return cleanupTranslatedText(output);
+}
+
+function protectEnglishPhrases(source, pairs) {
+  let output = source;
+  const placeholders = [];
+  for (const [from, to] of pairs.sort((a, b) => b[0].length - a[0].length)) {
+    const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    output = output.replace(new RegExp(escaped, "g"), () => {
+      const token = `__TT${placeholders.length}__`;
+      placeholders.push([token, to]);
+      return ` ${token} `;
+    });
+  }
+  for (const [token, value] of placeholders) output = output.replaceAll(token, value);
+  return output;
+}
+
+function segmentThai(text) {
+  try {
+    return [...new Intl.Segmenter("th", { granularity: "word" }).segment(text)]
+      .map(part => part.segment.trim())
+      .filter(Boolean);
+  } catch {
+    return text.match(/[\u0E00-\u0E7F]+/g) || [];
+  }
+}
+
+function cleanupTranslatedText(text) {
+  return String(text || "")
+    .replace(/\bmessage\b(?:\s+\bmessage\b)+/g, "message")
+    .replace(/\bplease\s+please\b/g, "please")
+    .replace(/\s+([?.!,])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function replacePhrases(source, pairs, wordMode = false) {

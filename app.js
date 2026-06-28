@@ -115,6 +115,7 @@ let view = {
   editingFolder: null,
   showNewFolderInput: false,
   aiComposeOpen: false,
+  composerDraft: "",
 };
 
 let qrStream = null, qrScanTimer = null;
@@ -956,7 +957,7 @@ function renderChat(chat) {
     <div class="composer-row">
       <label class="icon-btn"><i data-lucide="plus"></i><input type="file" data-action="file-input" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip" /></label>
       <button class="icon-btn" type="button" data-action="coming-soon" data-feature="กล้อง"><i data-lucide="camera"></i></button>
-      <input name="message" placeholder="พิมพ์ข้อความ" autocomplete="off" />
+      <input name="message" data-action="composer-message" value="${esc(view.composerDraft)}" placeholder="พิมพ์ข้อความ" autocomplete="off" />
       <button class="icon-btn" type="button" data-action="${IS_V2?"ai-compose":"coming-soon"}" data-feature="Emoji"><i data-lucide="${IS_V2?"wand-sparkles":"smile"}"></i></button>
       <button class="send-btn" type="submit"><i data-lucide="send"></i></button>
     </div>
@@ -1437,6 +1438,7 @@ app.addEventListener("submit", e => {
     const input = e.target.elements.message;
     sendMessage(input.value, view.pendingFile);
     view.aiComposeOpen = false;
+    view.composerDraft = "";
     input.value = "";
   }
   if (action==="do-search-friend") {
@@ -1466,6 +1468,7 @@ app.addEventListener("input", e => {
   if (action==="group-draft")     view.groupDraft     = e.target.value;
   if (action==="group-member-draft") view.groupMemberDraft = e.target.value;
   if (action==="qr-input")        view.qrInput        = e.target.value;
+  if (action==="composer-message") view.composerDraft = e.target.value;
   if (action==="chat-settings-search") { view.chatSearch = e.target.value; render(); }
   if (action==="folder-order") {
     ensureFolderSetting(e.target.dataset.folder).order = Math.max(1, Number(e.target.value || 1));
@@ -1609,6 +1612,7 @@ app.addEventListener("click", e => {
       t.classList.add("loading");
       aiRequest(mode==="translate"?"translate":"rewrite", payload).then(result=>{
         input.value=result.text;
+        view.composerDraft=result.text;
         view.aiComposeOpen=false;
         document.querySelector(".ai-compose-popover")?.remove();
         input.focus();
@@ -1648,7 +1652,11 @@ app.addEventListener("click", e => {
   }
   if (action==="back-list") { view.screen="list"; render(); }
   if (action==="call"||action==="coming-soon") { document.querySelector("#modal")?.classList.add("show"); }
-  if (action==="ai-compose") { view.aiComposeOpen=!view.aiComposeOpen; render(); }
+  if (action==="ai-compose") {
+    view.composerDraft = t.closest("form")?.elements?.message?.value || view.composerDraft;
+    view.aiComposeOpen=!view.aiComposeOpen;
+    render();
+  }
   if (action==="close-modal") { document.querySelector("#modal")?.classList.remove("show"); }
   if (action==="skip-tutorial") { userSettings().aiSettings.tutorialSeen=true; saveState(); render(); }
   if (action==="open-scanner") { view.scannerOpen=true; view.scannerStatus="กำลังเตรียมกล้อง..."; render(); }
