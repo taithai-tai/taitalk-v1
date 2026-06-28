@@ -3,3 +3,4 @@ data/
 .playwright-cli/
 .DS_Store
 .env
+*firebase-adminsdk*.json

@@ -91,9 +91,20 @@ Deploy on Railway:
 3. Generate a public domain in Railway Networking.
 4. Open that Railway URL on every phone. All phones will use the same server state and realtime sync.
 
-For durable production data, attach a Railway Volume. TaiTalk will automatically use `/data` when that mount exists, or you can set `DATA_DIR` to the mounted path yourself.
+For durable production data, configure Firebase Firestore on the server. TaiTalk reads and writes the whole app state to `appState/taitalk` when `FIREBASE_SERVICE_ACCOUNT_BASE64` is set, and falls back to the local JSON file only when Firebase is not configured or unavailable.
 
-Accounts are stored on the server through the auth API, so users can log in again with the same username and password after signing up once. Without a Railway Volume, Railway can still lose file data when the service is redeployed or rebuilt.
+Firebase environment variables:
+
+```sh
+FIREBASE_SERVICE_ACCOUNT_BASE64=base64_encoded_service_account_json
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_STATE_COLLECTION=appState
+FIREBASE_STATE_DOC=taitalk
+```
+
+On Railway, add those values under Variables, then redeploy. Check `/api/health`; it should return `"storage":"firebase"` when Firebase is active.
+
+Accounts are stored on the server through the auth API, so users can log in again with the same username and password after signing up once. With Firebase configured, data survives Railway redeploys without a Railway Volume.
 
 You can still open `index.html` directly for offline UI testing, but cross-device sync only works through the Node server.
 

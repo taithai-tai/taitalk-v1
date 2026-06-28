@@ -3,6 +3,8 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync, createReadStream, readFileSync, statSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = resolve(".");
@@ -10,6 +12,10 @@ const DATA_DIR = process.env.DATA_DIR || (existsSync("/data") ? "/data" : join(R
 const DATA_FILE = process.env.DATA_FILE || join(DATA_DIR, "taitalk-state.json");
 const MAX_BODY = 30 * 1024 * 1024;
 loadEnv();
+const FIREBASE_SERVICE_ACCOUNT_BASE64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 || "";
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "";
+const FIREBASE_STATE_COLLECTION = process.env.FIREBASE_STATE_COLLECTION || "appState";
+const FIREBASE_STATE_DOC = process.env.FIREBASE_STATE_DOC || "taitalk";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-oss-120b:free";
 const LINE_CHANNEL_ID = process.env.LINE_CHANNEL_ID || "";
@@ -36,6 +42,7 @@ const mime = {
 };
 
 const clients = new Set();
+let activeStorageMode = "json";
 let db = await loadDb();
 
 function defaultState() {
@@ -58,7 +65,24 @@ function defaultState() {
   };
 }
 
-async function loadDb() {
+function firebaseDb() {
+  if (!FIREBASE_SERVICE_ACCOUNT_BASE64) return null;
+  try {
+    if (!getApps().length) {
+      const serviceAccount = JSON.parse(Buffer.from(FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf8"));
+      initializeApp({
+        credential: cert(serviceAccount),
+        projectId: FIREBASE_PROJECT_ID || serviceAccount.project_id,
+      });
+    }
+    return getFirestore();
+  } catch (error) {
+    console.warn("Firebase disabled:", error.message);
+    return null;
+  }
+}
+
+async function loadFileDb() {
   try {
     const raw = await readFile(DATA_FILE, "utf8");
     const parsed = JSON.parse(raw);
@@ -68,7 +92,47 @@ async function loadDb() {
   }
 }
 
+async function loadDb() {
+  const firestore = firebaseDb();
+  if (firestore) {
+    try {
+      const ref = firestore.collection(FIREBASE_STATE_COLLECTION).doc(FIREBASE_STATE_DOC);
+      const snap = await ref.get();
+      if (snap.exists) {
+        const data = snap.data() || {};
+        activeStorageMode = "firebase";
+        return { version: data.version || 1, state: normalizeState(data.state || defaultState()) };
+      }
+      const fileDb = await loadFileDb();
+      await ref.set({ ...fileDb, updatedAt: new Date().toISOString() });
+      activeStorageMode = "firebase";
+      return fileDb;
+    } catch (error) {
+      console.warn("Firebase load failed, using JSON file:", error.message);
+    }
+  }
+  return loadFileDb();
+}
+
+async function saveFirebaseDb() {
+  const firestore = firebaseDb();
+  if (!firestore) return false;
+  try {
+    await firestore.collection(FIREBASE_STATE_COLLECTION).doc(FIREBASE_STATE_DOC).set({
+      ...db,
+      updatedAt: new Date().toISOString(),
+    });
+    activeStorageMode = "firebase";
+    return true;
+  } catch (error) {
+    console.warn("Firebase save failed, writing JSON file:", error.message);
+    activeStorageMode = "json";
+    return false;
+  }
+}
+
 async function saveDb() {
+  if (await saveFirebaseDb()) return;
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(DATA_FILE, JSON.stringify(db, null, 2));
 }
@@ -729,7 +793,7 @@ createServer(async (req, res) => {
     return;
   }
   if (url.pathname === "/api/health") {
-    sendJson(res, 200, { ok: true, version: db.version });
+    sendJson(res, 200, { ok: true, version: db.version, storage: activeStorageMode, firebaseConfigured: Boolean(FIREBASE_SERVICE_ACCOUNT_BASE64) });
     return;
   }
   if (url.pathname === "/api/state" && req.method === "GET") {
