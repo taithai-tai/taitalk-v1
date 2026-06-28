@@ -245,15 +245,37 @@ function mockAiResult(task, input = {}) {
   const text = String(input.text || input.prompt || "");
   if (task === "rewrite") {
     const mode = input.mode || "rewrite";
-    if (mode === "formal") return { mode: "mock", text: text ? `เรียนแจ้งว่า ${text.trim()}` : "เรียนแจ้งให้ทราบครับ/ค่ะ" };
+    if (mode === "formal") return { mode: "mock", text: text ? formalizeThai(text) : "เรียนแจ้งให้ทราบครับ/ค่ะ" };
+    if (mode === "polish" || mode === "rewrite") return { mode: "mock", text: text ? polishText(text) : "พิมพ์ข้อความที่ต้องการปรับให้อ่านง่ายขึ้น" };
     if (mode === "friendly") return { mode: "mock", text: text ? `${text.trim()} นะ ขอบคุณมาก!` : "ได้เลย ขอบคุณมากนะ!" };
     if (mode === "shorten") return { mode: "mock", text: text ? text.trim().split(/\s+/).slice(0, 14).join(" ") : "รับทราบ" };
-    return { mode: "mock", text: text ? `${text.trim()} ครับ/ค่ะ` : "ขอบคุณมากครับ/ค่ะ" };
+    return { mode: "mock", text: polishText(text) };
   }
   if (task === "translate") return { mode: "mock", text: mockTranslate(text, input.target) };
   if (task === "summary") return { mode: "mock", text: "• Important: มีข้อความที่ควรติดตาม\n• Deadline: ตรวจคำว่า วันนี้/พรุ่งนี้/ส่งงาน\n• File: รวมไฟล์จากแชทนี้\n• To-do: ตอบกลับหรือสร้าง reminder หากจำเป็น" };
   if (task === "search") return { mode: "mock", text: "ผลลัพธ์ mock: พบข้อมูลที่เกี่ยวข้องจากชื่อแชท ข้อความล่าสุด และชื่อไฟล์" };
   return { mode: "mock", text: "AI mock พร้อมใช้งาน" };
+}
+
+function polishText(text) {
+  return String(text || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/ผมเจอว่า/g, "ผมพบว่า")
+    .replace(/มัน/g, "ส่วนนี้")
+    .replace(/อะ/g, "")
+    .replace(/นะครับนะ/g, "นะครับ")
+    .replace(/ค่ะค่ะ/g, "ค่ะ")
+    .replace(/ครับครับ/g, "ครับ")
+    .replace(/([.!?]){2,}/g, "$1")
+    .trim();
+}
+
+function formalizeThai(text) {
+  const polished = polishText(text);
+  if (!polished) return "เรียนแจ้งให้ทราบครับ/ค่ะ";
+  if (/^(เรียน|ขอเรียน|เนื่องจาก|รบกวน|โปรด)/.test(polished)) return polished;
+  return `เรียนแจ้งให้ทราบว่า ${polished} จึงขอความกรุณาดำเนินการตามความเหมาะสม ขอบคุณครับ/ค่ะ`;
 }
 
 function mockTranslate(text, target = "") {
@@ -318,11 +340,12 @@ function aiInstruction(task, input = {}) {
   if (task === "rewrite") {
     const mode = input.mode || "rewrite";
     const modes = {
-      formal: "Rewrite the message in polite formal Thai suitable for work or school.",
+      formal: "Rewrite the message into clearly formal Thai. Make it suitable for work, school, or official communication. It may change tone significantly, but keep the original meaning. Return only the rewritten message.",
+      polish: "Polish the message for grammar, clarity, readability, and natural wording. Do not make it more formal, do not add new meaning, and keep the original tone. Return only the improved message.",
       friendly: "Rewrite the message in friendly natural Thai.",
       shorten: "Shorten the message while keeping the main meaning.",
       translate: "Translate the message into natural Thai unless the text is already Thai, then translate it into English.",
-      rewrite: "Improve the wording to be clearer and polite.",
+      rewrite: "Polish the message for grammar, clarity, readability, and natural wording. Do not make it more formal, do not add new meaning, and keep the original tone. Return only the improved message.",
     };
     return modes[mode] || modes.rewrite;
   }

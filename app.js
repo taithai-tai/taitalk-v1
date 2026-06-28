@@ -956,11 +956,10 @@ function renderChat(chat) {
       <button class="send-btn" type="submit"><i data-lucide="send"></i></button>
     </div>
     ${IS_V2 ? `<div class="ai-compose-bar">
-      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="rewrite">Rewrite</button>
-      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="formal">Formal</button>
-      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="friendly">Friendly</button>
-      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="shorten">Shorten</button>
-      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="translate">Translate</button>
+      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="polish">ดูดีขึ้น</button>
+      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="formal">ทางการ</button>
+      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="shorten">สั้นลง</button>
+      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="translate">แปล</button>
     </div>` : ""}
   </form>
 </section>`;
