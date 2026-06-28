@@ -77,13 +77,29 @@ function handleFromUsername(username) {
   return `@${String(username || "user").trim().toLowerCase().replace(/^@+/, "")}`;
 }
 
-function lineUsernameFromId(lineId) {
+function shortHash(value, salt = 1) {
+  let hash = 0;
+  for (const ch of `${value}:${salt}`) hash = ((hash << 5) - hash + ch.charCodeAt(0)) >>> 0;
+  return hash.toString(36).padStart(4, "0").slice(0, 4);
+}
+
+function lineUsernameFromId(lineId, salt = 0) {
   const safe = String(lineId || "")
     .toLowerCase()
     .replace(/^line[:_-]?/, "")
     .replace(/[^a-z0-9._]/g, "")
-    .slice(0, 7) || Math.random().toString(36).slice(2, 9);
-  return `line_${safe}`;
+    .replace(/[^a-z0-9]/g, "");
+  return salt ? shortHash(safe || lineId, salt) : (safe.slice(0, 4) || Math.random().toString(36).slice(2, 6));
+}
+
+function availableLineUsername(lineId, currentUser = null) {
+  for (let salt = 0; salt < 25; salt += 1) {
+    const username = lineUsernameFromId(lineId, salt);
+    const userId = handleFromUsername(username);
+    const conflict = db.state.users.find(user => user !== currentUser && (user.id === userId || user.username === username));
+    if (!conflict) return username;
+  }
+  return lineUsernameFromId(`${lineId}-${Date.now()}`, 1);
 }
 
 function randomToken(bytes = 24) {
@@ -341,11 +357,12 @@ function pruneLineMaps() {
 function upsertLineUser(profile) {
   const lineId = String(profile.userId || profile.sub || "").trim();
   if (!lineId) throw new Error("LINE profile missing userId");
-  const username = lineUsernameFromId(lineId);
-  const targetId = handleFromUsername(username);
   const displayName = String(profile.displayName || profile.name || "LINE User").trim() || "LINE User";
   const pictureUrl = String(profile.pictureUrl || profile.picture || "").trim();
-  let user = db.state.users.find(u => u.lineId === lineId || u.username === username || u.id === targetId);
+  let user = db.state.users.find(u => u.lineId === lineId);
+  const username = availableLineUsername(lineId, user);
+  const targetId = handleFromUsername(username);
+  user = user || db.state.users.find(u => u.username === username || u.id === targetId);
   if (!user) {
     user = { id: targetId, username, displayName, password: "line-login", avatar: pictureUrl, blocked: [], lineId, authProvider: "line" };
     db.state.users.push(user);

@@ -143,17 +143,27 @@ function isGithubPagesWithoutBackend() {
 function handleFromUsername(username) {
   return `@${String(username || "user").trim().toLowerCase().replace(/^@+/, "")}`;
 }
-function lineUsernameFromId(lineId) {
+function shortHash(value, salt = 1) {
+  let hash = 0;
+  for (const ch of `${value}:${salt}`) hash = ((hash << 5) - hash + ch.charCodeAt(0)) >>> 0;
+  return hash.toString(36).padStart(4, "0").slice(0, 4);
+}
+function lineUsernameFromId(lineId, salt = 0) {
   const safe = String(lineId || "")
     .toLowerCase()
     .replace(/^line[:_-]?/, "")
     .replace(/[^a-z0-9._]/g, "")
-    .slice(0, 7) || Math.random().toString(36).slice(2, 9);
-  return `line_${safe}`;
+    .replace(/[^a-z0-9]/g, "");
+  return salt ? shortHash(safe || lineId, salt) : (safe.slice(0, 4) || Math.random().toString(36).slice(2, 6));
 }
-function compactLineHandle(user) {
-  const lineId = user?.lineId || (/^@?line_[a-z0-9._]{10,}$/i.test(user?.id || "") ? String(user.id).replace(/^@?line_/, "") : "");
-  return lineId ? handleFromUsername(lineUsernameFromId(lineId)) : "";
+function availableLineUsername(lineId, currentUser = null) {
+  for (let salt = 0; salt < 25; salt += 1) {
+    const username = lineUsernameFromId(lineId, salt);
+    const userId = handleFromUsername(username);
+    const conflict = state.users.find(user => user !== currentUser && (user.id === userId || user.username === username));
+    if (!conflict) return username;
+  }
+  return lineUsernameFromId(`${lineId}-${Date.now()}`, 1);
 }
 function lineMockProfile() {
   try {
@@ -303,14 +313,51 @@ async function aiRequest(task, input) {
     return { mode: "mock", text: "AI mock: ยังไม่ได้เชื่อมต่อ API" };
   }
 }
+function replaceLocalObjectKey(obj = {}, oldId, newId) {
+  return Object.fromEntries(Object.entries(obj || {}).map(([key, value]) => [key === oldId ? newId : key, value]));
+}
+function replaceLocalUserId(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  state.friendships = (state.friendships || []).map(pair => pair.map(id => id === oldId ? newId : id));
+  state.userSettings = Object.fromEntries(Object.entries(state.userSettings || {}).map(([key, value]) => [key === oldId ? newId : key, value]));
+  state.chats = (state.chats || []).map(chat => ({
+    ...chat,
+    members: (chat.members || []).map(id => id === oldId ? newId : id),
+    unread: replaceLocalObjectKey(chat.unread, oldId, newId),
+    importantUnread: replaceLocalObjectKey(chat.importantUnread, oldId, newId),
+    hiddenFor: (chat.hiddenFor || []).map(id => id === oldId ? newId : id),
+    pinnedFor: (chat.pinnedFor || []).map(id => id === oldId ? newId : id),
+    mutedFor: (chat.mutedFor || []).map(id => id === oldId ? newId : id),
+    messages: (chat.messages || []).map(message => ({
+      ...message,
+      senderId: message.senderId === oldId ? newId : message.senderId,
+      hiddenFor: (message.hiddenFor || []).map(id => id === oldId ? newId : id),
+    })),
+  }));
+}
 function migrateStateIds(data) {
   const idMap = new Map();
+  const usedIds = new Set();
   for (const user of data.users || []) {
-    idMap.set(user.id, compactLineHandle(user) || legacyIdToHandle(user.id, user.username));
+    if (!user.lineId && user.authProvider !== "line" && user.authProvider !== "liff") {
+      usedIds.add(legacyIdToHandle(user.id, user.username));
+    }
+  }
+  for (const user of data.users || []) {
+    const lineId = user?.lineId || (/^@?line_[a-z0-9._]{10,}$/i.test(user?.id || "") ? String(user.id).replace(/^@?line_/, "") : "");
+    let nextId = legacyIdToHandle(user.id, user.username);
+    if (lineId) {
+      for (let salt = 0; salt < 25; salt += 1) {
+        const candidate = handleFromUsername(lineUsernameFromId(lineId, salt));
+        if (!usedIds.has(candidate) || candidate === user.id) { nextId = candidate; break; }
+      }
+    }
+    usedIds.add(nextId);
+    idMap.set(user.id, nextId);
   }
   data.users = (data.users || []).map((user) => {
-    const nextId = compactLineHandle(user) || legacyIdToHandle(user.id, user.username);
-    const nextUsername = nextId.startsWith("@line_") ? nextId.slice(1) : user.username;
+    const nextId = idMap.get(user.id) || legacyIdToHandle(user.id, user.username);
+    const nextUsername = (user.lineId || user.authProvider === "line" || user.authProvider === "liff") ? nextId.slice(1) : user.username;
     if (nextId !== user.id) didMigrateState = true;
     if (nextUsername !== user.username) didMigrateState = true;
     return { ...user, id: nextId, username: nextUsername, blocked: (user.blocked || []).map((id) => idMap.get(id) || legacyIdToHandle(id)) };
@@ -756,12 +803,19 @@ async function handleLineLogin() {
 
 function loginWithLocalLineProfile(profile) {
   const lineId = profile.userId || profile.lineId;
-  const username = lineUsernameFromId(lineId);
+  let user = state.users.find(u => u.lineId === lineId);
+  const username = availableLineUsername(lineId, user);
   const userId = handleFromUsername(username);
-  let user = state.users.find(u => u.lineId === lineId || u.id === userId || u.username === username);
+  user = user || state.users.find(u => u.id === userId || u.username === username);
   if (!user) {
     user = { id:userId, username, displayName:profile.displayName || "LINE User", password:"line-login", avatar:profile.pictureUrl || "", blocked:[], lineId, authProvider:"liff" };
     state.users.push(user);
+    saveState();
+  } else if (user.id !== userId || user.username !== username) {
+    const oldId = user.id;
+    user.id = userId;
+    user.username = username;
+    replaceLocalUserId(oldId, userId);
     saveState();
   }
   sessionId = user.id;
