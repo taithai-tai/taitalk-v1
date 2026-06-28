@@ -7,7 +7,9 @@ const SESSION_KEY = "taitalk:v2:session";
 const SYNC_CHANNEL = "taitalk:v2:sync";
 const TAB_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const API_BASE = window.TAITALK_API_BASE || "";
-const IS_V2 = location.pathname.includes("/v2");
+const IS_VB1 = location.pathname.includes("/vb1") || location.pathname.includes("/v.b1");
+const IS_V2 = location.pathname.includes("/v2") || IS_VB1;
+const LINE_PROFILE_KEY = "taitalk:vb1:line-profile";
 const app = document.querySelector("#app");
 let didMigrateState = false;
 let syncChannel = null;
@@ -128,6 +130,24 @@ function unique(arr) { return [...new Set(arr)]; }
 function makeId(p) { return `${p}-${Math.random().toString(36).slice(2,8)}-${Date.now().toString(36)}`; }
 function handleFromUsername(username) {
   return `@${String(username || "user").trim().toLowerCase().replace(/^@+/, "")}`;
+}
+function lineUsernameFromId(lineId) {
+  const safe = String(lineId || "")
+    .toLowerCase()
+    .replace(/^line[:_-]?/, "")
+    .replace(/[^a-z0-9._]/g, "")
+    .slice(0, 18) || Math.random().toString(36).slice(2, 10);
+  return `line_${safe}`;
+}
+function lineMockProfile() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LINE_PROFILE_KEY) || "null");
+    if (saved?.lineId) return saved;
+  } catch {}
+  const randomPart = (globalThis.crypto?.randomUUID?.() || makeId("line")).replace(/[^a-z0-9]/gi, "").slice(0, 12).toLowerCase();
+  const profile = { lineId: `line-${randomPart}`, displayName: "LINE User" };
+  localStorage.setItem(LINE_PROFILE_KEY, JSON.stringify(profile));
+  return profile;
 }
 function legacyIdToHandle(id, username = "") {
   const raw = String(id || "").trim();
@@ -636,6 +656,34 @@ function showAuthError(msg) {
   if (el) { el.textContent=msg; el.classList.add("show"); }
 }
 
+async function handleLineLogin() {
+  const profile = lineMockProfile();
+  try {
+    const remoteUserId = await remoteAuth("/api/auth/line", profile);
+    if (remoteUserId) {
+      sessionId = remoteUserId;
+      setStoredSession(sessionId);
+      view._authUser=""; view._authPass="";
+      view.screen="home"; render(); return;
+    }
+  } catch (error) {
+    if (remoteAvailable) { showAuthError(error.message); return; }
+  }
+
+  const username = lineUsernameFromId(profile.lineId);
+  const userId = handleFromUsername(username);
+  let user = state.users.find(u => u.lineId === profile.lineId || u.id === userId || u.username === username);
+  if (!user) {
+    user = { id:userId, username, displayName:profile.displayName || "LINE User", password:"line-login", avatar:"", blocked:[], lineId:profile.lineId, authProvider:"line" };
+    state.users.push(user);
+    saveState();
+  }
+  sessionId = user.id;
+  setStoredSession(sessionId);
+  view._authUser=""; view._authPass="";
+  view.screen="home"; render();
+}
+
 // ─── Friend search ────────────────────────────────────────────
 function doFriendSearch(raw) {
   const q = parseFriendQuery(raw);
@@ -738,6 +786,11 @@ function renderAuth() {
       <button class="primary" type="submit"><i data-lucide="${isReg?"user-plus":"log-in"}"></i>${isReg?"สมัครสมาชิก":"เข้าสู่ระบบ"}</button>
       <p class="hint">${isReg?"สมัครใหม่เพื่อเริ่มใช้งาน TaiTalk":"ใช้บัญชีที่สมัครไว้บนเครื่องนี้"}</p>
     </form>
+    ${IS_VB1 ? `
+    <div class="auth-divider"><span>หรือ</span></div>
+    <button class="line-login" type="button" data-action="line-login"><i data-lucide="message-circle"></i>Login with LINE</button>
+    <p class="hint">V.b1 ใช้ LINE Login แบบ prototype และเก็บบัญชีไว้ในระบบเดียวกับ TaiTalk</p>
+    ` : ""}
   </div>
 </section>`;
 }
@@ -819,22 +872,24 @@ function renderHome() {
   const actions = IS_V2
     ? [["เพิ่มเพื่อน","user-plus","people"],["AI Search","sparkles","aiSearch"],["File Hub","folder-open","library"],["สรุปข่าววันนี้","newspaper","todaySummary"],["Reminder","alarm-clock","reminders"],["Priority","bell-ring","notifications"],["Privacy AI","shield","privacy"],["Settings","settings","settings"]]
     : [["เพิ่มเพื่อน","user-plus","people"],["สร้างกลุ่ม","users","groups"],["OpenChat","messages-square","coming"],["สร้าง Folder","folder-plus","newFolder"],["ตั้งค่า Folder","folder-cog","folders"],["Settings","settings","settings"],["คลังไฟล์","folder-open","library"],["Profile QR","qr-code","profile"]];
+  const versionLabel = IS_VB1 ? "TaiTalk V.b1" : "TaiTalk V2";
   return `<section class="home-page">
-  <div class="home-hero"><p>${IS_V2 ? "TaiTalk V2" : "TaiTalk Home"}</p><h2>${IS_V2 ? "AI ช่วยจัดแชท ไฟล์ และแจ้งเตือน" : "ทุกอย่างของแชทอยู่ที่นี่"}</h2></div>
+  <div class="home-hero"><p>${IS_V2 ? versionLabel : "TaiTalk Home"}</p><h2>${IS_V2 ? "AI ช่วยจัดแชท ไฟล์ และแจ้งเตือน" : "ทุกอย่างของแชทอยู่ที่นี่"}</h2></div>
   ${IS_V2 ? renderOnboardingCard() : ""}
   <div class="quick-grid">${actions.map(([label,icon,tab])=>`
     <button data-action="${tab==="coming"?"coming-soon":"detail-tab"}" data-tab="${tab}" data-feature="${label}">
       <i data-lucide="${icon}"></i><span>${label}</span>
     </button>`).join("")}</div>
-  <div class="home-card"><strong>${IS_V2 ? "ทำไมควรลอง V2" : "LINE-style services"}</strong><p>${IS_V2 ? "เก็บไฟล์ไม่หมดอายุ, ค้นหาด้วย AI, สรุปแชท, privacy ต่อแชท และตั้งค่าส่วนตัวต่อบัญชี" : "Stickers, official accounts, games, coupons, mini apps"}</p></div>
+  <div class="home-card"><strong>${IS_V2 ? `ทำไมควรลอง ${versionLabel.replace("TaiTalk ","")}` : "LINE-style services"}</strong><p>${IS_V2 ? "เก็บไฟล์ไม่หมดอายุ, ค้นหาด้วย AI, สรุปแชท, privacy ต่อแชท และตั้งค่าส่วนตัวต่อบัญชี" : "Stickers, official accounts, games, coupons, mini apps"}</p></div>
 </section>`;
 }
 
 function renderOnboardingCard() {
   if (!IS_V2 || userSettings().aiSettings.tutorialSeen) return "";
+  const versionLabel = IS_VB1 ? "V.b1" : "V2";
   return `<div class="home-card onboarding-card">
-    <strong>เริ่มต้น TaiTalk V2</strong>
-    <p>V2 เพิ่ม Folder ส่วนตัว, File Hub, AI Search, AI Summary, Reminder และ Privacy Control</p>
+    <strong>เริ่มต้น TaiTalk ${versionLabel}</strong>
+    <p>${versionLabel} เพิ่ม Folder ส่วนตัว, File Hub, AI Search, AI Summary, Reminder และ Privacy Control</p>
     <div class="inline"><button class="primary" data-action="detail-tab" data-tab="tutorial">ดู Tutorial</button><button class="ghost" data-action="skip-tutorial">Skip</button></div>
   </div>`;
 }
@@ -1537,6 +1592,9 @@ app.addEventListener("click", e => {
     const pEl = document.querySelector(".form [name='password']");
     view._authUser = uEl?.value||""; view._authPass = pEl?.value||"";
     view.authMode = t.dataset.mode; render();
+  }
+  if (action==="line-login") {
+    handleLineLogin();
   }
   if (action==="logout") {
     sessionId=null; clearStoredSession();

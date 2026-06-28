@@ -50,6 +50,12 @@ Open `http://localhost:3000/v2` for the V2 prototype. V2 keeps the familiar LINE
 - Smart reminder cards from messages that mention deadlines or appointments
 - Priority notification center, onboarding tutorial, backup, and restore
 
+## TaiTalk V.b1 prototype
+
+Open `http://localhost:3000/v.b1` or `http://localhost:3000/vb1` for V.b1. This page currently mirrors V2 and adds a prototype LINE Login button.
+
+LINE Login in V.b1 uses a mock LINE identity for now. When clicked, the server creates or reuses a real TaiTalk account linked to that mock LINE ID, so it can participate in the same saved account, friend, chat, and sync system as normal username/password accounts.
+
 Optional OpenRouter AI setup:
 
 ```sh

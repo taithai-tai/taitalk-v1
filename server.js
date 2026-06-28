@@ -68,6 +68,15 @@ function handleFromUsername(username) {
   return `@${String(username || "user").trim().toLowerCase().replace(/^@+/, "")}`;
 }
 
+function lineUsernameFromId(lineId) {
+  const safe = String(lineId || "")
+    .toLowerCase()
+    .replace(/^line[:_-]?/, "")
+    .replace(/[^a-z0-9._]/g, "")
+    .slice(0, 18) || Math.random().toString(36).slice(2, 10);
+  return `line_${safe}`;
+}
+
 function unique(values) {
   return [...new Set((values || []).filter(Boolean))];
 }
@@ -215,7 +224,7 @@ function sendJson(res, status, data) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,PUT,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   });
   res.end(JSON.stringify(data));
@@ -524,7 +533,13 @@ function cleanAiText(text) {
 }
 
 function serveFile(res, pathname) {
-  const clean = pathname === "/" ? "/index.html" : pathname === "/v2" ? "/v2.html" : decodeURIComponent(pathname);
+  const clean = pathname === "/"
+    ? "/index.html"
+    : pathname === "/v2"
+      ? "/v2.html"
+      : pathname === "/vb1" || pathname === "/v.b1"
+        ? "/vb1.html"
+        : decodeURIComponent(pathname);
   const file = resolve(join(ROOT, clean));
   if (!file.startsWith(ROOT) || !existsSync(file)) {
     sendJson(res, 404, { error: "Not found" });
@@ -599,6 +614,43 @@ createServer(async (req, res) => {
       db.version += 1;
       await saveDb();
       notifyClients(body.clientId || "");
+      sendJson(res, 200, { ...publicAuthState(), userId: user.id });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message || "Bad request" });
+    }
+    return;
+  }
+  if (url.pathname === "/api/auth/line" && req.method === "POST") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const lineId = String(body.lineId || "").trim();
+      if (!lineId) {
+        sendJson(res, 400, { error: "ไม่พบ LINE ID" });
+        return;
+      }
+      const username = lineUsernameFromId(lineId);
+      const displayName = String(body.displayName || "LINE User").trim() || "LINE User";
+      let user = db.state.users.find(u => u.lineId === lineId || u.username === username || u.id === handleFromUsername(username));
+      if (!user) {
+        user = { id: handleFromUsername(username), username, displayName, password: "line-login", avatar: "", blocked: [], lineId, authProvider: "line" };
+        db.state.users.push(user);
+        db.version += 1;
+        await saveDb();
+        notifyClients(body.clientId || "");
+      } else {
+        let changed = false;
+        if (!user.lineId) { user.lineId = lineId; changed = true; }
+        if (!user.authProvider) { user.authProvider = "line"; changed = true; }
+        if (displayName && user.displayName !== displayName && user.displayName === user.username) {
+          user.displayName = displayName;
+          changed = true;
+        }
+        if (changed) {
+          db.version += 1;
+          await saveDb();
+          notifyClients(body.clientId || "");
+        }
+      }
       sendJson(res, 200, { ...publicAuthState(), userId: user.id });
     } catch (error) {
       sendJson(res, 400, { error: error.message || "Bad request" });
