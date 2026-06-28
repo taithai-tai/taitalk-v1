@@ -244,6 +244,12 @@ function aiCategoryForChat(chat) {
 function detectReminderText(text) {
   return /(พรุ่งนี้|วันนี้|วันศุกร์|deadline|ส่งงาน|ประชุม|นัด|เจอกัน|\d{1,2}\s?โมง|\d{1,2}:\d{2})/i.test(text || "");
 }
+function containsThai(text) {
+  return /[\u0E00-\u0E7F]/.test(text || "");
+}
+function translateTargetForText(text) {
+  return containsThai(text) ? "English" : "Thai";
+}
 async function aiRequest(task, input) {
   try {
     const res = await fetch(`${API_BASE}/api/ai`, {
@@ -1594,7 +1600,10 @@ app.addEventListener("click", e => {
     const input=form?.elements?.message;
     if (input) {
       const mode=t.dataset.mode;
-      aiRequest(mode==="translate"?"translate":"rewrite", { mode, text: input.value }).then(result=>{ input.value=result.text; input.focus(); });
+      const payload = mode === "translate"
+        ? { mode, text: input.value, target: translateTargetForText(input.value) }
+        : { mode, text: input.value };
+      aiRequest(mode==="translate"?"translate":"rewrite", payload).then(result=>{ input.value=result.text; input.focus(); });
     }
   }
   if (action==="toggle-mute-chat") {
@@ -1675,7 +1684,8 @@ app.addEventListener("click", e => {
   if (action==="translate-message") {
     const chat=state.chats.find(c=>c.id===t.dataset.chat);
     const msg=chat?.messages.find(m=>m.id===t.dataset.message);
-    if (msg) aiRequest("translate", { text: msg.text || msg.file?.name || "", target: "th" }).then(result=>{ msg.translation=result.text; saveState(); render(); });
+    const text = msg?.text || msg?.file?.name || "";
+    if (msg) aiRequest("translate", { text, target: translateTargetForText(text) }).then(result=>{ msg.translation=result.text; saveState(); render(); });
   }
   if (action==="create-reminder" || action==="ignore-reminder") {
     const chat=state.chats.find(c=>c.id===t.dataset.chat);

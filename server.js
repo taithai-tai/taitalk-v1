@@ -250,10 +250,62 @@ function mockAiResult(task, input = {}) {
     if (mode === "shorten") return { mode: "mock", text: text ? text.trim().split(/\s+/).slice(0, 14).join(" ") : "รับทราบ" };
     return { mode: "mock", text: text ? `${text.trim()} ครับ/ค่ะ` : "ขอบคุณมากครับ/ค่ะ" };
   }
-  if (task === "translate") return { mode: "mock", text: `[แปล mock] ${text}` };
+  if (task === "translate") return { mode: "mock", text: mockTranslate(text, input.target) };
   if (task === "summary") return { mode: "mock", text: "• Important: มีข้อความที่ควรติดตาม\n• Deadline: ตรวจคำว่า วันนี้/พรุ่งนี้/ส่งงาน\n• File: รวมไฟล์จากแชทนี้\n• To-do: ตอบกลับหรือสร้าง reminder หากจำเป็น" };
   if (task === "search") return { mode: "mock", text: "ผลลัพธ์ mock: พบข้อมูลที่เกี่ยวข้องจากชื่อแชท ข้อความล่าสุด และชื่อไฟล์" };
   return { mode: "mock", text: "AI mock พร้อมใช้งาน" };
+}
+
+function mockTranslate(text, target = "") {
+  const source = String(text || "").trim();
+  if (!source) return "";
+  const thai = /[\u0E00-\u0E7F]/.test(source);
+  const toEnglish = /^en|english$/i.test(target) || (!target && thai);
+  const toThai = /^th|thai$/i.test(target) || (!target && !thai);
+  if (toEnglish && thai) {
+    return replacePhrases(source, [
+      ["ช่วยส่งไฟล์งานให้หน่อย", "please send me the work file"],
+      ["ช่วยส่งไฟล์ให้หน่อย", "please send me the file"],
+      ["ส่งไฟล์งาน", "send the work file"],
+      ["ส่งไฟล์", "send the file"],
+      ["ส่งงาน", "submit the assignment"],
+      ["ไฟล์งาน", "work file"],
+      ["ให้หน่อย", "for me"],
+      ["พรุ่งนี้", "tomorrow"],
+      ["วันนี้", "today"],
+      ["ประชุม", "meeting"],
+      ["สอบ", "exam"],
+      ["ด่วน", "urgent"],
+      ["นะ", ""],
+    ]);
+  }
+  if (toThai && !thai) {
+    return replacePhrases(source, [
+      ["please send me the work file", "ช่วยส่งไฟล์งานให้หน่อย"],
+      ["please send me the file", "ช่วยส่งไฟล์ให้หน่อย"],
+      ["submit the assignment", "ส่งงาน"],
+      ["send the work file", "ส่งไฟล์งาน"],
+      ["send the file", "ส่งไฟล์"],
+      ["work file", "ไฟล์งาน"],
+      ["tomorrow", "พรุ่งนี้"],
+      ["today", "วันนี้"],
+      ["meeting", "ประชุม"],
+      ["exam", "สอบ"],
+      ["urgent", "ด่วน"],
+      ["please", "ช่วย"],
+    ], true);
+  }
+  return source;
+}
+
+function replacePhrases(source, pairs, wordMode = false) {
+  let output = String(source || "");
+  for (const [from, to] of pairs.sort((a, b) => b[0].length - a[0].length)) {
+    const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = wordMode ? new RegExp(`\\b${escaped}\\b`, "gi") : new RegExp(escaped, "g");
+    output = output.replace(pattern, ` ${to} `);
+  }
+  return output.replace(/\s+/g, " ").trim();
 }
 
 function aiInstruction(task, input = {}) {
@@ -261,7 +313,7 @@ function aiInstruction(task, input = {}) {
     return "Summarize the chat into concise Thai bullet points. Use exactly these section labels when relevant: Important, Deadline, Link, File, To-do. Do not invent facts.";
   }
   if (task === "translate") {
-    return `Translate the provided text. Target language: ${input.target || "Thai"}. Return only the translation, no explanation.`;
+    return `Translate the provided text into ${input.target || "Thai"}. Return only the translated text, no prefix, no explanation, no quotation marks.`;
   }
   if (task === "rewrite") {
     const mode = input.mode || "rewrite";
