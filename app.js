@@ -148,8 +148,12 @@ function lineUsernameFromId(lineId) {
     .toLowerCase()
     .replace(/^line[:_-]?/, "")
     .replace(/[^a-z0-9._]/g, "")
-    .slice(0, 18) || Math.random().toString(36).slice(2, 10);
+    .slice(0, 7) || Math.random().toString(36).slice(2, 9);
   return `line_${safe}`;
+}
+function compactLineHandle(user) {
+  const lineId = user?.lineId || (/^@?line_[a-z0-9._]{10,}$/i.test(user?.id || "") ? String(user.id).replace(/^@?line_/, "") : "");
+  return lineId ? handleFromUsername(lineUsernameFromId(lineId)) : "";
 }
 function lineMockProfile() {
   try {
@@ -302,12 +306,14 @@ async function aiRequest(task, input) {
 function migrateStateIds(data) {
   const idMap = new Map();
   for (const user of data.users || []) {
-    idMap.set(user.id, legacyIdToHandle(user.id, user.username));
+    idMap.set(user.id, compactLineHandle(user) || legacyIdToHandle(user.id, user.username));
   }
   data.users = (data.users || []).map((user) => {
-    const nextId = legacyIdToHandle(user.id, user.username);
+    const nextId = compactLineHandle(user) || legacyIdToHandle(user.id, user.username);
+    const nextUsername = nextId.startsWith("@line_") ? nextId.slice(1) : user.username;
     if (nextId !== user.id) didMigrateState = true;
-    return { ...user, id: nextId, blocked: (user.blocked || []).map((id) => idMap.get(id) || legacyIdToHandle(id)) };
+    if (nextUsername !== user.username) didMigrateState = true;
+    return { ...user, id: nextId, username: nextUsername, blocked: (user.blocked || []).map((id) => idMap.get(id) || legacyIdToHandle(id)) };
   });
   const convert = (id) => idMap.get(id) || legacyIdToHandle(id);
   data.friendships = (data.friendships || []).map((pair) => pair.map(convert));

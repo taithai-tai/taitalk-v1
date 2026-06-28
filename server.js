@@ -82,7 +82,7 @@ function lineUsernameFromId(lineId) {
     .toLowerCase()
     .replace(/^line[:_-]?/, "")
     .replace(/[^a-z0-9._]/g, "")
-    .slice(0, 18) || Math.random().toString(36).slice(2, 10);
+    .slice(0, 7) || Math.random().toString(36).slice(2, 9);
   return `line_${safe}`;
 }
 
@@ -157,6 +157,35 @@ function mergeObjectsByMax(a = {}, b = {}) {
   const out = { ...a };
   for (const [key, value] of Object.entries(b)) out[key] = Math.max(Number(out[key] || 0), Number(value || 0));
   return out;
+}
+
+function replaceObjectKey(obj = {}, oldId, newId) {
+  const out = {};
+  for (const [key, value] of Object.entries(obj || {})) {
+    out[key === oldId ? newId : key] = Math.max(Number(out[key === oldId ? newId : key] || 0), Number(value || 0));
+  }
+  return out;
+}
+
+function replaceUserId(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return false;
+  db.state.friendships = (db.state.friendships || []).map(pair => pair.map(id => id === oldId ? newId : id));
+  db.state.userSettings = Object.fromEntries(Object.entries(db.state.userSettings || {}).map(([key, value]) => [key === oldId ? newId : key, value]));
+  db.state.chats = (db.state.chats || []).map(chat => ({
+    ...chat,
+    members: (chat.members || []).map(id => id === oldId ? newId : id),
+    unread: replaceObjectKey(chat.unread, oldId, newId),
+    importantUnread: replaceObjectKey(chat.importantUnread, oldId, newId),
+    hiddenFor: (chat.hiddenFor || []).map(id => id === oldId ? newId : id),
+    pinnedFor: (chat.pinnedFor || []).map(id => id === oldId ? newId : id),
+    mutedFor: (chat.mutedFor || []).map(id => id === oldId ? newId : id),
+    messages: (chat.messages || []).map(message => ({
+      ...message,
+      senderId: message.senderId === oldId ? newId : message.senderId,
+      hiddenFor: (message.hiddenFor || []).map(id => id === oldId ? newId : id),
+    })),
+  }));
+  return true;
 }
 
 function mergeMessages(current = [], incoming = []) {
@@ -313,15 +342,22 @@ function upsertLineUser(profile) {
   const lineId = String(profile.userId || profile.sub || "").trim();
   if (!lineId) throw new Error("LINE profile missing userId");
   const username = lineUsernameFromId(lineId);
+  const targetId = handleFromUsername(username);
   const displayName = String(profile.displayName || profile.name || "LINE User").trim() || "LINE User";
   const pictureUrl = String(profile.pictureUrl || profile.picture || "").trim();
-  let user = db.state.users.find(u => u.lineId === lineId || u.username === username || u.id === handleFromUsername(username));
+  let user = db.state.users.find(u => u.lineId === lineId || u.username === username || u.id === targetId);
   if (!user) {
-    user = { id: handleFromUsername(username), username, displayName, password: "line-login", avatar: pictureUrl, blocked: [], lineId, authProvider: "line" };
+    user = { id: targetId, username, displayName, password: "line-login", avatar: pictureUrl, blocked: [], lineId, authProvider: "line" };
     db.state.users.push(user);
     return { user, changed: true };
   }
   let changed = false;
+  if (user.id !== targetId && !db.state.users.some(u => u.id === targetId && u !== user)) {
+    const oldId = user.id;
+    user.id = targetId;
+    changed = replaceUserId(oldId, targetId) || true;
+  }
+  if (user.username !== username) { user.username = username; changed = true; }
   if (!user.lineId) { user.lineId = lineId; changed = true; }
   if (user.authProvider !== "line") { user.authProvider = "line"; changed = true; }
   if (displayName && user.displayName !== displayName) { user.displayName = displayName; changed = true; }
@@ -824,28 +860,15 @@ createServer(async (req, res) => {
         sendJson(res, 400, { error: "ไม่พบ LINE ID" });
         return;
       }
-      const username = lineUsernameFromId(lineId);
-      const displayName = String(body.displayName || "LINE User").trim() || "LINE User";
-      let user = db.state.users.find(u => u.lineId === lineId || u.username === username || u.id === handleFromUsername(username));
-      if (!user) {
-        user = { id: handleFromUsername(username), username, displayName, password: "line-login", avatar: "", blocked: [], lineId, authProvider: "line" };
-        db.state.users.push(user);
+      const { user, changed } = upsertLineUser({
+        userId: lineId,
+        displayName: String(body.displayName || "LINE User").trim() || "LINE User",
+        pictureUrl: "",
+      });
+      if (changed) {
         db.version += 1;
         await saveDb();
         notifyClients(body.clientId || "");
-      } else {
-        let changed = false;
-        if (!user.lineId) { user.lineId = lineId; changed = true; }
-        if (!user.authProvider) { user.authProvider = "line"; changed = true; }
-        if (displayName && user.displayName !== displayName && user.displayName === user.username) {
-          user.displayName = displayName;
-          changed = true;
-        }
-        if (changed) {
-          db.version += 1;
-          await saveDb();
-          notifyClients(body.clientId || "");
-        }
       }
       sendJson(res, 200, { ...publicAuthState(), userId: user.id });
     } catch (error) {
