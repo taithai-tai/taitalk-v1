@@ -916,6 +916,7 @@ textarea:focus {
 }
 
 .composer {
+  position: relative;
   padding: 10px 12px max(12px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
   background: var(--white);
@@ -959,11 +960,40 @@ textarea:focus {
   padding-inline: 12px;
 }
 
-.ai-compose-bar {
-  display: flex;
+.ai-compose-popover {
+  position: absolute;
+  right: 58px;
+  bottom: calc(100% - 6px);
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(96px, 1fr));
   gap: 6px;
-  overflow-x: auto;
-  padding-top: 8px;
+  width: min(260px, calc(100% - 24px));
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  box-shadow: var(--shadow);
+}
+
+.ai-compose-popover button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--soft);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.ai-compose-popover button.loading {
+  opacity: 0.65;
+  pointer-events: none;
 }
 
 .jump-latest {
@@ -1565,6 +1595,12 @@ textarea:focus {
   .composer {
     padding-left: 8px;
     padding-right: 8px;
+  }
+
+  .ai-compose-popover {
+    right: 48px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: min(246px, calc(100% - 16px));
   }
 
   .composer-row {

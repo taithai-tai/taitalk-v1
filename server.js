@@ -286,13 +286,19 @@ function mockTranslate(text, target = "") {
   const toThai = /^th|thai$/i.test(target) || (!target && !thai);
   if (toEnglish && thai) {
     return replacePhrases(source, [
+      ["สวัสดี", "hello"],
+      ["ขอบคุณ", "thank you"],
+      ["ขอโทษ", "sorry"],
       ["ช่วยส่งไฟล์งานให้หน่อย", "please send me the work file"],
       ["ช่วยส่งไฟล์ให้หน่อย", "please send me the file"],
+      ["ช่วยดูให้หน่อย", "please take a look"],
       ["ส่งไฟล์งาน", "send the work file"],
       ["ส่งไฟล์", "send the file"],
       ["ส่งงาน", "submit the assignment"],
       ["ไฟล์งาน", "work file"],
       ["ให้หน่อย", "for me"],
+      ["ไม่ว่าง", "not available"],
+      ["เดี๋ยว", "later"],
       ["พรุ่งนี้", "tomorrow"],
       ["วันนี้", "today"],
       ["ประชุม", "meeting"],
@@ -303,8 +309,12 @@ function mockTranslate(text, target = "") {
   }
   if (toThai && !thai) {
     return replacePhrases(source, [
+      ["hello", "สวัสดี"],
+      ["thank you", "ขอบคุณ"],
+      ["sorry", "ขอโทษ"],
       ["please send me the work file", "ช่วยส่งไฟล์งานให้หน่อย"],
       ["please send me the file", "ช่วยส่งไฟล์ให้หน่อย"],
+      ["please take a look", "ช่วยดูให้หน่อย"],
       ["submit the assignment", "ส่งงาน"],
       ["send the work file", "ส่งไฟล์งาน"],
       ["send the file", "ส่งไฟล์"],
@@ -377,7 +387,16 @@ async function runAi(task, input) {
   });
   if (!response.ok) return mockAiResult(task, input);
   const data = await response.json();
-  return { mode: "api", text: data.choices?.[0]?.message?.content || mockAiResult(task, input).text };
+  const text = cleanAiText(data.choices?.[0]?.message?.content || "");
+  return { mode: "api", text: text || mockAiResult(task, input).text };
+}
+
+function cleanAiText(text) {
+  return String(text || "")
+    .trim()
+    .replace(/^["'“”]+|["'“”]+$/g, "")
+    .replace(/^(translation|translated text|คำแปล)\s*[:：]\s*/i, "")
+    .trim();
 }
 
 function serveFile(res, pathname) {

@@ -114,6 +114,7 @@ let view = {
   openSwipeDir: null,
   editingFolder: null,
   showNewFolderInput: false,
+  aiComposeOpen: false,
 };
 
 let qrStream = null, qrScanTimer = null;
@@ -249,6 +250,9 @@ function containsThai(text) {
 }
 function translateTargetForText(text) {
   return containsThai(text) ? "English" : "Thai";
+}
+function aiModeLabel(mode) {
+  return ({ polish: "ดูดีขึ้น", formal: "ทางการ", shorten: "สั้นลง", translate: "แปล" })[mode] || mode;
 }
 async function aiRequest(task, input) {
   try {
@@ -921,6 +925,7 @@ function renderChatRow(chat) {
 function renderChat(chat) {
   const messages = visibleMessages(chat);
   const otherId = chat.type === "direct" ? chat.members.find(id => id !== sessionId) : "";
+  const aiActions = [["polish","sparkles"],["formal","briefcase-business"],["shorten","text-cursor-input"],["translate","languages"]];
   return `<section class="chat">
   <header class="chat-head">
     <div class="chat-title">
@@ -955,12 +960,9 @@ function renderChat(chat) {
       <button class="icon-btn" type="button" data-action="${IS_V2?"ai-compose":"coming-soon"}" data-feature="Emoji"><i data-lucide="${IS_V2?"wand-sparkles":"smile"}"></i></button>
       <button class="send-btn" type="submit"><i data-lucide="send"></i></button>
     </div>
-    ${IS_V2 ? `<div class="ai-compose-bar">
-      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="polish">ดูดีขึ้น</button>
-      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="formal">ทางการ</button>
-      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="shorten">สั้นลง</button>
-      <button class="mini" type="button" data-action="ai-compose-mode" data-mode="translate">แปล</button>
-    </div>` : ""}
+    ${IS_V2 && view.aiComposeOpen ? `<div class="ai-compose-popover">${aiActions.map(([mode,icon])=>`
+      <button type="button" data-action="ai-compose-mode" data-mode="${mode}"><i data-lucide="${icon}"></i><span>${aiModeLabel(mode)}</span></button>
+    `).join("")}</div>` : ""}
   </form>
 </section>`;
 }
@@ -974,13 +976,13 @@ function renderMessage(chat, msg) {
   ${chat.type==="group"&&!mine?`<span class="small">${esc(userName(sender))}</span>`:""}
   <div class="bubble${cls?" "+cls:""}">
     ${msg.unsent?`<span class="small">ยกเลิกข้อความแล้ว`:(esc(msg.text)+(msg.file?`<div class="file-chip">${msg.file.type?.startsWith("image/")&&msg.file.url?`<img src="${esc(msg.file.url)}" alt="${esc(msg.file.name)}" />`:`<i data-lucide="${fileIcon(msg.file.name)}"></i>`}<div><strong>${esc(msg.file.name)}</strong><div class="small">${esc(msg.file.type||"file")}</div></div></div>`:"")+`</span>`)}
-    ${IS_V2 && msg.translation ? `<div class="translation">แปล: ${esc(msg.translation)}</div>` : ""}
+    ${IS_V2 && (msg.translation || msg.translationLoading) ? `<div class="translation">${msg.translationLoading ? "กำลังแปล..." : `แปล: ${esc(msg.translation)}`}</div>` : ""}
   </div>
   ${IS_V2 && msg.reminderSuggestion ? `<div class="reminder-card"><strong>ตรวจพบนัดหมาย</strong><span>${esc(msg.text || msg.file?.name || "")}</span><button class="mini" data-action="create-reminder" data-chat="${chat.id}" data-message="${msg.id}">Create Reminder</button><button class="mini" data-action="ignore-reminder" data-chat="${chat.id}" data-message="${msg.id}">Ignore</button></div>` : ""}
   <div class="status">${statusText(msg,mine)}</div>
   ${!msg.unsent?`<div class="message-menu">
     <button class="mini" data-action="delete-self" data-chat="${chat.id}" data-message="${msg.id}">ลบฝั่งฉัน</button>
-    ${IS_V2 ? `<button class="mini" data-action="translate-message" data-chat="${chat.id}" data-message="${msg.id}">แปล</button>` : ""}
+    ${IS_V2 ? `<button class="mini" data-action="translate-message" data-chat="${chat.id}" data-message="${msg.id}" ${msg.translationLoading?"disabled":""}>${msg.translationLoading?"กำลังแปล":"แปล"}</button>` : ""}
     ${canUnsend?`<button class="mini danger" data-action="unsend" data-chat="${chat.id}" data-message="${msg.id}">ลบทั้งสองฝั่ง</button>`:""}
   </div>`:""}
 </article>`;
@@ -1434,6 +1436,7 @@ app.addEventListener("submit", e => {
   if (action==="send-message") {
     const input = e.target.elements.message;
     sendMessage(input.value, view.pendingFile);
+    view.aiComposeOpen = false;
     input.value = "";
   }
   if (action==="do-search-friend") {
@@ -1602,7 +1605,14 @@ app.addEventListener("click", e => {
       const payload = mode === "translate"
         ? { mode, text: input.value, target: translateTargetForText(input.value) }
         : { mode, text: input.value };
-      aiRequest(mode==="translate"?"translate":"rewrite", payload).then(result=>{ input.value=result.text; input.focus(); });
+      t.disabled = true;
+      t.classList.add("loading");
+      aiRequest(mode==="translate"?"translate":"rewrite", payload).then(result=>{
+        input.value=result.text;
+        view.aiComposeOpen=false;
+        document.querySelector(".ai-compose-popover")?.remove();
+        input.focus();
+      });
     }
   }
   if (action==="toggle-mute-chat") {
@@ -1638,6 +1648,7 @@ app.addEventListener("click", e => {
   }
   if (action==="back-list") { view.screen="list"; render(); }
   if (action==="call"||action==="coming-soon") { document.querySelector("#modal")?.classList.add("show"); }
+  if (action==="ai-compose") { view.aiComposeOpen=!view.aiComposeOpen; render(); }
   if (action==="close-modal") { document.querySelector("#modal")?.classList.remove("show"); }
   if (action==="skip-tutorial") { userSettings().aiSettings.tutorialSeen=true; saveState(); render(); }
   if (action==="open-scanner") { view.scannerOpen=true; view.scannerStatus="กำลังเตรียมกล้อง..."; render(); }
@@ -1684,7 +1695,18 @@ app.addEventListener("click", e => {
     const chat=state.chats.find(c=>c.id===t.dataset.chat);
     const msg=chat?.messages.find(m=>m.id===t.dataset.message);
     const text = msg?.text || msg?.file?.name || "";
-    if (msg) aiRequest("translate", { text, target: translateTargetForText(text) }).then(result=>{ msg.translation=result.text; saveState(); render(); });
+    if (msg) {
+      msg.translationLoading = true;
+      saveState(); render();
+      aiRequest("translate", { text, target: translateTargetForText(text) }).then(result=>{
+        const latestChat=state.chats.find(c=>c.id===t.dataset.chat);
+        const latestMsg=latestChat?.messages.find(m=>m.id===t.dataset.message);
+        if (!latestMsg) return;
+        latestMsg.translation=result.text;
+        latestMsg.translationLoading=false;
+        saveState(); render();
+      });
+    }
   }
   if (action==="create-reminder" || action==="ignore-reminder") {
     const chat=state.chats.find(c=>c.id===t.dataset.chat);
