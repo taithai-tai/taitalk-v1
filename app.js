@@ -6,7 +6,11 @@ const STORAGE_KEY = "taitalk:v2";
 const SESSION_KEY = "taitalk:v2:session";
 const SYNC_CHANNEL = "taitalk:v2:sync";
 const TAB_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-const API_BASE = window.TAITALK_API_BASE || "";
+const API_BASE_KEY = "taitalk:api-base";
+const urlParams = new URLSearchParams(location.search);
+const queryApiBase = urlParams.get("apiBase") || "";
+if (queryApiBase) localStorage.setItem(API_BASE_KEY, queryApiBase.replace(/\/+$/, ""));
+const API_BASE = (window.TAITALK_API_BASE || queryApiBase || localStorage.getItem(API_BASE_KEY) || "").replace(/\/+$/, "");
 const IS_VB1 = location.pathname.includes("/vb1") || location.pathname.includes("/v.b1");
 const IS_V2 = location.pathname.includes("/v2") || IS_VB1;
 const LINE_PROFILE_KEY = "taitalk:vb1:line-profile";
@@ -579,6 +583,47 @@ async function remoteAuth(path, payload) {
   return data.userId;
 }
 
+async function consumeLineSessionFromUrl() {
+  const token = urlParams.get("lineSession");
+  if (!token || !canUseRemoteSync()) return false;
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/line/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, clientId: TAB_ID }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "LINE Login ไม่สำเร็จ");
+    remoteAvailable = true;
+    remoteStateVersion = data.version || remoteStateVersion;
+    state = migrateStateIds(data.state || state);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    sessionId = data.userId;
+    setStoredSession(sessionId);
+    view._authUser=""; view._authPass="";
+    view.screen="home";
+    const clean = new URL(location.href);
+    clean.searchParams.delete("lineSession");
+    clean.searchParams.delete("apiBase");
+    history.replaceState(null, "", clean.pathname + clean.search + clean.hash);
+    broadcastStateChange();
+    render();
+    return true;
+  } catch (error) {
+    showAuthError(error.message || "LINE Login ไม่สำเร็จ");
+    return false;
+  }
+}
+
+function showLineErrorFromUrl() {
+  const error = urlParams.get("lineError");
+  if (!error) return;
+  const clean = new URL(location.href);
+  clean.searchParams.delete("lineError");
+  history.replaceState(null, "", clean.pathname + clean.search + clean.hash);
+  requestAnimationFrame(() => showAuthError(decodeURIComponent(error)));
+}
+
 function startRemoteRealtime() {
   if (!canUseRemoteSync()) return;
   if ("EventSource" in window) {
@@ -657,6 +702,11 @@ function showAuthError(msg) {
 }
 
 async function handleLineLogin() {
+  if (canUseRemoteSync()) {
+    const returnTo = location.href;
+    location.href = `${API_BASE}/api/auth/line/start?returnTo=${encodeURIComponent(returnTo)}`;
+    return;
+  }
   const profile = lineMockProfile();
   try {
     const remoteUserId = await remoteAuth("/api/auth/line", profile);
@@ -789,7 +839,7 @@ function renderAuth() {
     ${IS_VB1 ? `
     <div class="auth-divider"><span>หรือ</span></div>
     <button class="line-login" type="button" data-action="line-login"><i data-lucide="message-circle"></i>Login with LINE</button>
-    <p class="hint">V.b1 ใช้ LINE Login แบบ prototype และเก็บบัญชีไว้ในระบบเดียวกับ TaiTalk</p>
+    <p class="hint">V.b1 ใช้ LINE Login จริงเมื่อ server ตั้งค่า LINE Channel แล้ว</p>
     ` : ""}
   </div>
 </section>`;
@@ -2154,7 +2204,10 @@ window.addEventListener("storage", (event) => {
 async function initApp() {
   await pullRemoteState();
   startRemoteRealtime();
-  render();
+  if (!(await consumeLineSessionFromUrl())) {
+    render();
+    showLineErrorFromUrl();
+  }
 }
 
 initApp();

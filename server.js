@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync, createReadStream, readFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
+import { randomBytes } from "node:crypto";
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = resolve(".");
@@ -11,6 +12,14 @@ const MAX_BODY = 30 * 1024 * 1024;
 loadEnv();
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-oss-120b:free";
+const LINE_CHANNEL_ID = process.env.LINE_CHANNEL_ID || "";
+const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || "";
+const LINE_CALLBACK_URL = process.env.LINE_CALLBACK_URL || "";
+const LINE_AUTH_ENDPOINT = "https://access.line.me/oauth2/v2.1/authorize";
+const LINE_TOKEN_ENDPOINT = "https://api.line.me/oauth2/v2.1/token";
+const LINE_PROFILE_ENDPOINT = "https://api.line.me/v2/profile";
+const lineLoginStates = new Map();
+const lineSessions = new Map();
 
 const DEFAULT_FOLDERS = ["Main","Important","Advertising","Request","Group","Work","Study","Friends","Family"];
 
@@ -75,6 +84,10 @@ function lineUsernameFromId(lineId) {
     .replace(/[^a-z0-9._]/g, "")
     .slice(0, 18) || Math.random().toString(36).slice(2, 10);
   return `line_${safe}`;
+}
+
+function randomToken(bytes = 24) {
+  return randomBytes(bytes).toString("hex");
 }
 
 function unique(values) {
@@ -230,6 +243,11 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+function redirect(res, location, status = 302) {
+  res.writeHead(status, { Location: location, "Cache-Control": "no-cache" });
+  res.end();
+}
+
 function readBody(req) {
   return new Promise((resolveBody, reject) => {
     let body = "";
@@ -243,6 +261,95 @@ function readBody(req) {
     req.on("end", () => resolveBody(body));
     req.on("error", reject);
   });
+}
+
+function requestBaseUrl(req) {
+  const proto = req.headers["x-forwarded-proto"] || (req.socket.encrypted ? "https" : "http");
+  const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${PORT}`;
+  return `${String(proto).split(",")[0]}://${String(host).split(",")[0]}`;
+}
+
+function callbackUrl(req) {
+  return LINE_CALLBACK_URL || `${requestBaseUrl(req)}/api/auth/line/callback`;
+}
+
+function safeReturnTo(value, req) {
+  const fallback = `${requestBaseUrl(req)}/vb1`;
+  if (!value) return fallback;
+  try {
+    const parsed = new URL(value, requestBaseUrl(req));
+    if (!["http:", "https:"].includes(parsed.protocol)) return fallback;
+    return parsed.href;
+  } catch {
+    return fallback;
+  }
+}
+
+function createLineAuthUrl(req, returnTo) {
+  const state = randomToken(18);
+  const nonce = randomToken(18);
+  lineLoginStates.set(state, { returnTo, nonce, createdAt: Date.now() });
+  const authUrl = new URL(LINE_AUTH_ENDPOINT);
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("client_id", LINE_CHANNEL_ID);
+  authUrl.searchParams.set("redirect_uri", callbackUrl(req));
+  authUrl.searchParams.set("state", state);
+  authUrl.searchParams.set("scope", "profile openid");
+  authUrl.searchParams.set("nonce", nonce);
+  return authUrl.href;
+}
+
+function pruneLineMaps() {
+  const now = Date.now();
+  for (const [key, item] of lineLoginStates) {
+    if (now - item.createdAt > 10 * 60 * 1000) lineLoginStates.delete(key);
+  }
+  for (const [key, item] of lineSessions) {
+    if (now - item.createdAt > 5 * 60 * 1000) lineSessions.delete(key);
+  }
+}
+
+function upsertLineUser(profile) {
+  const lineId = String(profile.userId || profile.sub || "").trim();
+  if (!lineId) throw new Error("LINE profile missing userId");
+  const username = lineUsernameFromId(lineId);
+  const displayName = String(profile.displayName || profile.name || "LINE User").trim() || "LINE User";
+  const pictureUrl = String(profile.pictureUrl || profile.picture || "").trim();
+  let user = db.state.users.find(u => u.lineId === lineId || u.username === username || u.id === handleFromUsername(username));
+  if (!user) {
+    user = { id: handleFromUsername(username), username, displayName, password: "line-login", avatar: pictureUrl, blocked: [], lineId, authProvider: "line" };
+    db.state.users.push(user);
+    return { user, changed: true };
+  }
+  let changed = false;
+  if (!user.lineId) { user.lineId = lineId; changed = true; }
+  if (user.authProvider !== "line") { user.authProvider = "line"; changed = true; }
+  if (displayName && user.displayName !== displayName) { user.displayName = displayName; changed = true; }
+  if (pictureUrl && user.avatar !== pictureUrl) { user.avatar = pictureUrl; changed = true; }
+  return { user, changed };
+}
+
+async function exchangeLineCode(req, code) {
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: callbackUrl(req),
+    client_id: LINE_CHANNEL_ID,
+    client_secret: LINE_CHANNEL_SECRET,
+  });
+  const tokenResponse = await fetch(LINE_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const tokenData = await tokenResponse.json().catch(() => ({}));
+  if (!tokenResponse.ok) throw new Error(tokenData.error_description || tokenData.error || "LINE token exchange failed");
+  const profileResponse = await fetch(LINE_PROFILE_ENDPOINT, {
+    headers: { Authorization: `Bearer ${tokenData.access_token}` },
+  });
+  const profile = await profileResponse.json().catch(() => ({}));
+  if (!profileResponse.ok) throw new Error(profile.message || "LINE profile fetch failed");
+  return profile;
 }
 
 function notifyClients(clientId) {
@@ -615,6 +722,64 @@ createServer(async (req, res) => {
       await saveDb();
       notifyClients(body.clientId || "");
       sendJson(res, 200, { ...publicAuthState(), userId: user.id });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message || "Bad request" });
+    }
+    return;
+  }
+  if (url.pathname === "/api/auth/line/start" && req.method === "GET") {
+    pruneLineMaps();
+    const returnTo = safeReturnTo(url.searchParams.get("returnTo"), req);
+    if (!LINE_CHANNEL_ID || !LINE_CHANNEL_SECRET) {
+      const back = new URL(returnTo);
+      back.searchParams.set("lineError", "LINE_CONFIG_MISSING");
+      redirect(res, back.href);
+      return;
+    }
+    redirect(res, createLineAuthUrl(req, returnTo));
+    return;
+  }
+  if (url.pathname === "/api/auth/line/callback" && req.method === "GET") {
+    pruneLineMaps();
+    const state = url.searchParams.get("state") || "";
+    const saved = lineLoginStates.get(state);
+    const returnTo = saved?.returnTo || `${requestBaseUrl(req)}/vb1`;
+    lineLoginStates.delete(state);
+    const back = new URL(returnTo);
+    try {
+      if (url.searchParams.get("error")) throw new Error(url.searchParams.get("error_description") || "LINE Login ถูกยกเลิก");
+      if (!saved) throw new Error("LINE Login session หมดอายุ กรุณาลองใหม่");
+      const code = url.searchParams.get("code") || "";
+      if (!code) throw new Error("ไม่พบ LINE authorization code");
+      const profile = await exchangeLineCode(req, code);
+      const { user, changed } = upsertLineUser(profile);
+      if (changed) {
+        db.version += 1;
+        await saveDb();
+        notifyClients("line-login");
+      }
+      const token = randomToken(24);
+      lineSessions.set(token, { userId: user.id, createdAt: Date.now() });
+      back.searchParams.set("lineSession", token);
+      back.searchParams.set("apiBase", requestBaseUrl(req));
+    } catch (error) {
+      back.searchParams.set("lineError", error.message || "LINE Login ไม่สำเร็จ");
+    }
+    redirect(res, back.href);
+    return;
+  }
+  if (url.pathname === "/api/auth/line/session" && req.method === "POST") {
+    try {
+      pruneLineMaps();
+      const body = JSON.parse(await readBody(req) || "{}");
+      const token = String(body.token || "").trim();
+      const session = lineSessions.get(token);
+      lineSessions.delete(token);
+      if (!session) {
+        sendJson(res, 401, { error: "LINE session หมดอายุ กรุณาลองใหม่" });
+        return;
+      }
+      sendJson(res, 200, { ...publicAuthState(), userId: session.userId });
     } catch (error) {
       sendJson(res, 400, { error: error.message || "Bad request" });
     }

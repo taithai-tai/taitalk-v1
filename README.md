@@ -52,9 +52,23 @@ Open `http://localhost:3000/v2` for the V2 prototype. V2 keeps the familiar LINE
 
 ## TaiTalk V.b1 prototype
 
-Open `http://localhost:3000/v.b1` or `http://localhost:3000/vb1` for V.b1. This page currently mirrors V2 and adds a prototype LINE Login button.
+Open `http://localhost:3000/v.b1` or `http://localhost:3000/vb1` for V.b1. This page currently mirrors V2 and adds a LINE Login button.
 
-LINE Login in V.b1 uses a mock LINE identity for now. When clicked, the server creates or reuses a real TaiTalk account linked to that mock LINE ID, so it can participate in the same saved account, friend, chat, and sync system as normal username/password accounts.
+LINE Login in V.b1 uses LINE OAuth when these server environment variables are set:
+
+```sh
+LINE_CHANNEL_ID=your_line_login_channel_id
+LINE_CHANNEL_SECRET=your_line_login_channel_secret
+LINE_CALLBACK_URL=https://your-railway-domain.up.railway.app/api/auth/line/callback
+```
+
+Add the same `LINE_CALLBACK_URL` in the LINE Developers Console under the LINE Login channel callback URLs. If you open the app from GitHub Pages instead of Railway, include the backend URL once so the browser can remember it:
+
+```text
+https://taithai-tai.github.io/taitalk-v1/vb1?apiBase=https://your-railway-domain.up.railway.app
+```
+
+When LINE Login succeeds, the server creates or reuses a TaiTalk account linked to the real LINE user ID, then returns the user to V.b1.
 
 Optional OpenRouter AI setup:
 
